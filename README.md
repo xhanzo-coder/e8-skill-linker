@@ -1,43 +1,45 @@
 # 118 Skill Linker
 
-`118-skill-linker` 是一个用于管理 Agent skills 的管理型 skill。它帮助你把 skill 原件集中放在一个明确的中央目录中，再按项目创建入口链接，从而同时管理 Codex、Claude Code 和其他支持 Agent Skills 的工具。
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-它适合这些场景：
+`118-skill-linker` is a management skill for organizing Agent skills. It keeps skill sources in an explicit central library and creates project-level links for the skills each project uses, so you can manage Codex, Claude Code, and other Agent Skills-compatible tools from one place.
 
-- 在多个项目之间复用同一批 skills。
-- 安装、克隆、迁移、链接、更新或停用 skills。
-- 区分用户级 Agent 目录、项目级入口和中央 skills 原件目录。
-- 长期维护自己修改过的第三方 skill，并检查 Git 更新或 fork 状态。
-- 在 macOS、Linux 和 Windows 上使用 symlink 或 junction 管理项目入口。
+It is useful when you need to:
 
-## 重要概念
+- Reuse the same skills across multiple projects.
+- Install, clone, migrate, link, update, or disable skills.
+- Distinguish user-level Agent directories, project-level entry points, and central skill sources.
+- Maintain customized versions of third-party skills while tracking Git updates or fork status.
+- Manage project links with symlinks or junctions on macOS, Linux, and Windows.
 
-这个仓库包含一个 skill，位于 `skills/118-skill-linker/`。其中：
+## Key Concepts
 
-- `SKILL.md`：Agent 触发后读取的核心规则。
-- `references/`：按任务加载的详细流程。
-- `scripts/`：执行检查、配置、链接和迁移的确定性脚本。
+This repository contains one skill at `skills/118-skill-linker/`:
 
-中央 skills 库和 Agent 全局目录不是同一个概念：
+- `SKILL.md`: Core rules loaded by the Agent after the skill is triggered.
+- `references/`: Detailed workflows loaded only when needed.
+- `scripts/`: Deterministic scripts for inspection, configuration, linking, and migration.
 
-- 中央库保存 skill 原件，默认推荐 `~/.118-skill-linker/AgentSkills`。
-- macOS/Linux 的 Agent 全局目录通常是 `~/.agents/skills`、`~/.codex/skills` 或 `~/.claude/skills`。
-- Windows 使用 `%USERPROFILE%\.118-skill-linker\AgentSkills` 作为默认中央库。
-- 项目级 `.agents/skills`、`.codex/skills` 和 `.claude/skills` 是当前项目的入口。
+The central skill library and Agent global directories are different things:
 
-业务 skills 默认不直接安装到 Agent 全局目录。`118-skill-linker` 自己是管理型 skill，为了让新项目和新对话能够召回它，可以作为例外安装到用户级全局目录。
+- The central library stores skill sources. The default is `~/.118-skill-linker/AgentSkills`.
+- Common macOS/Linux Agent global directories include `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`.
+- On Windows, the default central library is `%USERPROFILE%\.118-skill-linker\AgentSkills`.
+- Project-level `.agents/skills`, `.codex/skills`, and `.claude/skills` are entry points for the current project.
 
-## 通过 npx 安装
+Business skills are not installed globally by default. `118-skill-linker` is a management skill, so it may be installed globally as an exception to make it discoverable in new projects and conversations.
 
-这里的 `npx skills` 是开源 Agent Skills 生态的安装 CLI。它从 GitHub 等来源发现并安装包含有效 `SKILL.md` 的 skill，不需要把本项目发布成 npm 包。
+## Install with npx
 
-先查看仓库能发现哪些 skills：
+`npx skills` is the open Agent Skills ecosystem's installation CLI. It discovers and installs skills with a valid `SKILL.md` from GitHub and other sources. This repository does not need to be published as an npm package.
+
+List the skills discovered in this repository:
 
 ```bash
 npx skills add xhanzo-coder/118-skill-linker --list
 ```
 
-项目级安装到 Codex：
+Install the skill for Codex in the current project:
 
 ```bash
 npx skills add xhanzo-coder/118-skill-linker \
@@ -45,7 +47,7 @@ npx skills add xhanzo-coder/118-skill-linker \
   --agent codex
 ```
 
-全局安装到 Codex：
+Install the management skill globally for Codex:
 
 ```bash
 npx skills add xhanzo-coder/118-skill-linker \
@@ -54,7 +56,7 @@ npx skills add xhanzo-coder/118-skill-linker \
   --agent codex
 ```
 
-同时安装到 Codex 和 Claude Code：
+Install it globally for both Codex and Claude Code:
 
 ```bash
 npx skills add xhanzo-coder/118-skill-linker \
@@ -64,47 +66,47 @@ npx skills add xhanzo-coder/118-skill-linker \
   --agent claude-code
 ```
 
-安装完成后，首次使用 `118-skill-linker` 时，它仍然会检查中央库配置，并在需要时询问是否进行全局自举安装。`npx skills add` 负责安装管理型 skill，本身不会自动创建或选择 `~/.118-skill-linker/AgentSkills`。
+After installation, the first use of `118-skill-linker` still checks the central library configuration and asks whether bootstrapping is needed. `npx skills add` installs the management skill; it does not automatically create or choose `~/.118-skill-linker/AgentSkills`.
 
-更新或卸载全局安装的管理型 skill：
+Update or remove a globally installed copy:
 
 ```bash
 npx skills update --global 118-skill-linker
 npx skills remove --global --agent codex 118-skill-linker
 ```
 
-更多安装来源和 CLI 选项见 [Skills CLI](https://www.skills.sh/docs/cli)。
+See the [Skills CLI documentation](https://www.skills.sh/docs/cli) for more source formats and options.
 
-## 第一次使用
+## First Use
 
-首次触发时，skill 会按以下顺序工作：
+When triggered for the first time, the skill follows this sequence:
 
-1. 检查 `118-skill-linker` 是否已经安装在用户级 Agent skills 目录中。
-2. 读取当前项目和用户级 `.skill-linker.json`。
-3. 如果没有配置，推荐非全局中央库：macOS/Linux 使用 `~/.118-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.118-skill-linker\AgentSkills`。
-4. 允许用户提供自定义父目录，并在该目录下派生 `.118-skill-linker/AgentSkills`。
-5. 只读扫描项目级和用户级 skills，明确区分来源、目标和影响。
-6. 对配置、迁移、同步、链接、删除、克隆和 Git 更新先给出计划，用户确认后才执行。
+1. Check whether `118-skill-linker` is installed in a user-level Agent skills directory.
+2. Read the project-level and user-level `.skill-linker.json` files.
+3. If no configuration exists, recommend a non-global central library: `~/.118-skill-linker/AgentSkills` on macOS/Linux or `%USERPROFILE%\.118-skill-linker\AgentSkills` on Windows.
+4. Accept a custom parent directory and derive `<parent>/.118-skill-linker/AgentSkills` beneath it.
+5. Inspect project-level and user-level skills in read-only mode and show sources, targets, and impacts separately.
+6. Present a plan and wait for confirmation before configuring, migrating, syncing, linking, removing, cloning, or running Git updates.
 
-默认不会把 `~/.agents/skills`、`~/.codex/skills` 或 `~/.claude/skills` 当作中央库。如果用户选择这些全局目录，必须明确提醒它们可能让 skills 对所有项目可见，并要求确认。
+By default, `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills` are not treated as the central library. If a user chooses one of these global directories, the skill must explain that the skills may become visible to every project and request explicit confirmation.
 
-## 配置中央库
+## Configure the Central Library
 
-用户级配置文件为：
+The user-level configuration file is:
 
 ```text
 ~/.skill-linker.json
 ```
 
-项目级配置文件为：
+The project-level configuration file is:
 
 ```text
-当前项目/.skill-linker.json
+<project-root>/.skill-linker.json
 ```
 
-项目级配置优先于用户级配置。普通个人使用建议只配置一个用户级中央库；项目级配置用于团队共享、客户隔离或测试场景。
+Project-level configuration takes precedence over user-level configuration. For personal use, configure one user-level central library. Use project-level configuration for team-shared, customer-isolated, or test-specific libraries.
 
-配置示例：
+Example:
 
 ```json
 {
@@ -113,7 +115,7 @@ npx skills remove --global --agent codex 118-skill-linker
 }
 ```
 
-Windows 示例：
+Windows example:
 
 ```json
 {
@@ -122,7 +124,7 @@ Windows 示例：
 }
 ```
 
-先执行 dry-run：
+Run a dry-run first:
 
 ```bash
 python3 skills/118-skill-linker/scripts/skill_manager.py config \
@@ -131,7 +133,7 @@ python3 skills/118-skill-linker/scripts/skill_manager.py config \
   --mode centralize
 ```
 
-用户确认后再执行：
+After confirmation, execute the change:
 
 ```bash
 python3 skills/118-skill-linker/scripts/skill_manager.py config \
@@ -141,7 +143,7 @@ python3 skills/118-skill-linker/scripts/skill_manager.py config \
   --execute
 ```
 
-如果用户提供的是自定义父目录，使用 `--central-base`，实际中央库会派生为 `<父目录>/.118-skill-linker/AgentSkills`：
+When the user provides a custom parent directory, use `--central-base`. The actual central library becomes `<parent>/.118-skill-linker/AgentSkills`:
 
 ```bash
 python3 skills/118-skill-linker/scripts/skill_manager.py config \
@@ -150,49 +152,49 @@ python3 skills/118-skill-linker/scripts/skill_manager.py config \
   --mode centralize
 ```
 
-## 常用命令
+## Common Commands
 
-以下命令默认只检查或 dry-run。涉及写入时，用户确认后再增加 `--execute`。
+The commands below inspect or dry-run by default. Add `--execute` only after the user has reviewed and confirmed the plan.
 
 ```bash
-# 查看当前项目、用户级目录和链接状态
+# Inspect project, user-level directories, and link status
 python3 skills/118-skill-linker/scripts/skill_manager.py inspect --project .
 
-# 查看当前生效配置
+# Show the effective configuration
 python3 skills/118-skill-linker/scripts/skill_manager.py config --project .
 
-# 检查失效链接和结构问题
+# Check broken links and structural problems
 python3 skills/118-skill-linker/scripts/skill_manager.py check --project .
 
-# 初始化项目级入口
+# Initialize project-level entry points
 python3 skills/118-skill-linker/scripts/skill_manager.py init \
   --project . \
   --agents claude,codex
 
-# 链接中央库中的一个 skill
+# Link one skill from the central library
 python3 skills/118-skill-linker/scripts/skill_manager.py link \
   --project . \
   --source ~/.118-skill-linker/AgentSkills/write-blog
 
-# 链接多个 skills
+# Link multiple skills
 python3 skills/118-skill-linker/scripts/skill_manager.py link-many \
   --project . \
   --sources ~/.118-skill-linker/AgentSkills/a,~/.118-skill-linker/AgentSkills/b
 
-# 从当前项目停用 skill，只删除入口链接
+# Disable a skill in the current project without deleting its source
 python3 skills/118-skill-linker/scripts/skill_manager.py unlink \
   --target .agents/skills/write-blog
 
-# 检查中央目录中的 Git 仓库更新
+# Check Git repositories in the central library for updates
 python3 skills/118-skill-linker/scripts/skill_manager.py updates \
   --central ~/.118-skill-linker/AgentSkills
 ```
 
-`link`、`link-many` 和 `migrate` 会拒绝未配置或未授权的源路径。不要把下载目录、桌面目录、仓库根目录或临时目录直接作为软链接目标。
+`link`, `link-many`, and `migrate` reject sources that are not configured or authorized. Do not point links directly at arbitrary download directories, desktop folders, repository roots, or temporary directories.
 
 ## Windows
 
-Windows 上可以使用目录 symlink，也可以使用 junction：
+Windows can use directory symlinks or junctions:
 
 ```powershell
 python skills\118-skill-linker\scripts\skill_manager.py init `
@@ -206,22 +208,23 @@ python skills\118-skill-linker\scripts\skill_manager.py link `
   --link-type junction
 ```
 
-创建 symlink 可能需要 Developer Mode 或管理员终端。Agent 可以检测并解释权限错误，但不应该静默提权、绕过 UAC 或输入管理员密码。
+Creating a symlink may require Developer Mode or an elevated terminal. An Agent may detect and explain permission errors, but it must not silently elevate privileges, bypass UAC, or enter an administrator password.
 
-## 安全行为
+## Safety Behavior
 
-- 默认先做只读检查或 dry-run。
-- 在配置中央库、迁移、同步、克隆、更新、checkout、删除或创建链接前，先列出计划并等待确认。
-- 不用链接覆盖已有真实目录。
-- 用户说“删除 skill”时，默认只从当前项目停用，不删除中央原件。
-- 通过链接编辑 skill 会修改中央原件，并影响所有指向它的项目。
-- 第三方 skill 有本地修改时，不自动 pull、覆盖或丢弃修改；长期维护时先讨论 fork 和 Git 策略。
+- Start with a read-only inspection or dry-run by default.
+- Present a plan and wait for confirmation before configuring the central library, migrating, syncing, cloning, updating, checking out, deleting, or creating links.
+- Never overwrite an existing real directory with a link.
+- Interpret “delete this skill” as disabling it in the current project unless the user explicitly asks to delete the source directory.
+- Editing a skill through a link changes the central source and affects every project pointing to it.
+- Do not pull over or discard local changes in a third-party skill. Discuss fork and Git ownership before long-term maintenance.
 
-## 仓库结构
+## Repository Layout
 
 ```text
 118-skill-linker/
 ├── README.md
+├── README.zh-CN.md
 ├── skills/
 │   └── 118-skill-linker/
 │       ├── SKILL.md
@@ -232,17 +235,17 @@ python skills\118-skill-linker\scripts\skill_manager.py link `
 └── .gitignore
 ```
 
-## 开发与验证
+## Development and Validation
 
-本项目遵循 [Agent Skills Specification](https://agentskills.io/specification)。修改 skill 后，至少检查：
+This project follows the [Agent Skills Specification](https://agentskills.io/specification). After changing the skill, run at least:
 
 ```bash
 skills-ref validate skills/118-skill-linker
 python3 -m py_compile skills/118-skill-linker/scripts/skill_manager.py
 ```
 
-详细 Agent 流程应放在 `skills/118-skill-linker/references/`，不要把 README 当作 Agent 运行规则的唯一来源。
+Detailed Agent workflows belong in `skills/118-skill-linker/references/`. README files are human-facing documentation and should not be the only source of Agent runtime rules.
 
-## 许可证
+## License
 
-当前仓库尚未声明具体许可证。正式作为开源项目分发前，请选择许可证并添加根目录 `LICENSE` 文件；在此之前，公开仓库不等于授予他人自由复制、修改或再发布的权利。
+This repository does not currently declare a specific license. Before distributing it as an open-source project, choose a license and add a root-level `LICENSE` file. A public repository alone does not grant permission to freely copy, modify, or redistribute the contents.
