@@ -1,4 +1,0 @@
-interface:
-  display_name: "118 Skill Linker"
-  short_description: "全局管理入口，按项目链接 skills"
-  default_prompt: "使用 $118-skill-linker 检查自身是否已全局安装，读取中央目录配置，并安全安装、链接、迁移或更新当前项目的 Agent skills。"

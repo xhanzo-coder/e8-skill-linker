@@ -1,8 +1,8 @@
-# 118 Skill Linker
+# E8 Skill Linker
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-`118-skill-linker` is a management skill for organizing Agent skills. It keeps skill sources in an explicit central library and creates project-level links for the skills each project uses, so you can manage Codex, Claude Code, and other Agent Skills-compatible tools from one place.
+`e8-skill-linker` is a management skill for organizing Agent skills. It keeps skill sources in an explicit central library and creates project-level links for the skills each project uses, so you can manage Codex, Claude Code, and other Agent Skills-compatible tools from one place.
 
 It is useful when you need to:
 
@@ -14,7 +14,7 @@ It is useful when you need to:
 
 ## Key Concepts
 
-This repository contains one skill at `skills/118-skill-linker/`:
+This repository contains one skill at `skills/e8-skill-linker/`:
 
 - `SKILL.md`: Core rules loaded by the Agent after the skill is triggered.
 - `references/`: Detailed workflows loaded only when needed.
@@ -22,12 +22,12 @@ This repository contains one skill at `skills/118-skill-linker/`:
 
 The central skill library and Agent global directories are different things:
 
-- The central library stores skill sources. The default is `~/.118-skill-linker/AgentSkills`.
+- The central library stores skill sources. The default is `~/.e8-skill-linker/AgentSkills`.
 - Common macOS/Linux Agent global directories include `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`.
-- On Windows, the default central library is `%USERPROFILE%\.118-skill-linker\AgentSkills`.
+- On Windows, the default central library is `%USERPROFILE%\.e8-skill-linker\AgentSkills`.
 - Project-level `.agents/skills`, `.codex/skills`, and `.claude/skills` are entry points for the current project.
 
-Business skills are not installed globally by default. `118-skill-linker` is a management skill, so it may be installed globally as an exception to make it discoverable in new projects and conversations.
+Business skills are not installed globally by default. `e8-skill-linker` is a management skill, so it may be installed globally as an exception to make it discoverable in new projects and conversations.
 
 ## Install with npx
 
@@ -36,22 +36,22 @@ Business skills are not installed globally by default. `118-skill-linker` is a m
 List the skills discovered in this repository:
 
 ```bash
-npx skills add xhanzo-coder/118-skill-linker --list
+npx skills add xhanzo-coder/e8-skill-linker --list
 ```
 
 Install the skill for Codex in the current project:
 
 ```bash
-npx skills add xhanzo-coder/118-skill-linker \
-  --skill 118-skill-linker \
+npx skills add xhanzo-coder/e8-skill-linker \
+  --skill e8-skill-linker \
   --agent codex
 ```
 
 Install the management skill globally for Codex:
 
 ```bash
-npx skills add xhanzo-coder/118-skill-linker \
-  --skill 118-skill-linker \
+npx skills add xhanzo-coder/e8-skill-linker \
+  --skill e8-skill-linker \
   --global \
   --agent codex
 ```
@@ -59,20 +59,20 @@ npx skills add xhanzo-coder/118-skill-linker \
 Install it globally for both Codex and Claude Code:
 
 ```bash
-npx skills add xhanzo-coder/118-skill-linker \
-  --skill 118-skill-linker \
+npx skills add xhanzo-coder/e8-skill-linker \
+  --skill e8-skill-linker \
   --global \
   --agent codex \
   --agent claude-code
 ```
 
-After installation, the first use of `118-skill-linker` still checks the central library configuration and asks whether bootstrapping is needed. `npx skills add` installs the management skill; it does not automatically create or choose `~/.118-skill-linker/AgentSkills`.
+After installation, the first use of `e8-skill-linker` still checks the central library configuration and asks whether bootstrapping is needed. `npx skills add` installs the management skill; it does not automatically create or choose `~/.e8-skill-linker/AgentSkills`.
 
 Update or remove a globally installed copy:
 
 ```bash
-npx skills update --global 118-skill-linker
-npx skills remove --global --agent codex 118-skill-linker
+npx skills update --global e8-skill-linker
+npx skills remove --global --agent codex e8-skill-linker
 ```
 
 See the [Skills CLI documentation](https://www.skills.sh/docs/cli) for more source formats and options.
@@ -81,10 +81,10 @@ See the [Skills CLI documentation](https://www.skills.sh/docs/cli) for more sour
 
 When triggered for the first time, the skill follows this sequence:
 
-1. Check whether `118-skill-linker` is installed in a user-level Agent skills directory.
+1. Check whether `e8-skill-linker` is installed in a user-level Agent skills directory.
 2. Read the project-level and user-level `.skill-linker.json` files.
-3. If no configuration exists, recommend a non-global central library: `~/.118-skill-linker/AgentSkills` on macOS/Linux or `%USERPROFILE%\.118-skill-linker\AgentSkills` on Windows.
-4. Accept a custom parent directory and derive `<parent>/.118-skill-linker/AgentSkills` beneath it.
+3. If no configuration exists, recommend a non-global central library: `~/.e8-skill-linker/AgentSkills` on macOS/Linux or `%USERPROFILE%\.e8-skill-linker\AgentSkills` on Windows.
+4. Accept a custom parent directory and derive `<parent>/.e8-skill-linker/AgentSkills` beneath it.
 5. Inspect project-level and user-level skills in read-only mode and show sources, targets, and impacts separately.
 6. Present a plan and wait for confirmation before configuring, migrating, syncing, linking, removing, cloning, or running Git updates.
 
@@ -110,7 +110,7 @@ Example:
 
 ```json
 {
-  "central_skills_dir": "/Users/you/.118-skill-linker/AgentSkills",
+  "central_skills_dir": "/Users/you/.e8-skill-linker/AgentSkills",
   "default_mode": "centralize"
 }
 ```
@@ -119,7 +119,7 @@ Windows example:
 
 ```json
 {
-  "central_skills_dir": "C:\\Users\\you\\.118-skill-linker\\AgentSkills",
+  "central_skills_dir": "C:\\Users\\you\\.e8-skill-linker\\AgentSkills",
   "default_mode": "centralize"
 }
 ```
@@ -127,26 +127,26 @@ Windows example:
 Run a dry-run first:
 
 ```bash
-python3 skills/118-skill-linker/scripts/skill_manager.py config \
+python3 skills/e8-skill-linker/scripts/skill_manager.py config \
   --scope user \
-  --central ~/.118-skill-linker/AgentSkills \
+  --central ~/.e8-skill-linker/AgentSkills \
   --mode centralize
 ```
 
 After confirmation, execute the change:
 
 ```bash
-python3 skills/118-skill-linker/scripts/skill_manager.py config \
+python3 skills/e8-skill-linker/scripts/skill_manager.py config \
   --scope user \
-  --central ~/.118-skill-linker/AgentSkills \
+  --central ~/.e8-skill-linker/AgentSkills \
   --mode centralize \
   --execute
 ```
 
-When the user provides a custom parent directory, use `--central-base`. The actual central library becomes `<parent>/.118-skill-linker/AgentSkills`:
+When the user provides a custom parent directory, use `--central-base`. The actual central library becomes `<parent>/.e8-skill-linker/AgentSkills`:
 
 ```bash
-python3 skills/118-skill-linker/scripts/skill_manager.py config \
+python3 skills/e8-skill-linker/scripts/skill_manager.py config \
   --scope user \
   --central-base "/Users/name/Desktop/WorkSpace" \
   --mode centralize
@@ -158,36 +158,36 @@ The commands below inspect or dry-run by default. Add `--execute` only after the
 
 ```bash
 # Inspect project, user-level directories, and link status
-python3 skills/118-skill-linker/scripts/skill_manager.py inspect --project .
+python3 skills/e8-skill-linker/scripts/skill_manager.py inspect --project .
 
 # Show the effective configuration
-python3 skills/118-skill-linker/scripts/skill_manager.py config --project .
+python3 skills/e8-skill-linker/scripts/skill_manager.py config --project .
 
 # Check broken links and structural problems
-python3 skills/118-skill-linker/scripts/skill_manager.py check --project .
+python3 skills/e8-skill-linker/scripts/skill_manager.py check --project .
 
 # Initialize project-level entry points
-python3 skills/118-skill-linker/scripts/skill_manager.py init \
+python3 skills/e8-skill-linker/scripts/skill_manager.py init \
   --project . \
   --agents claude,codex
 
 # Link one skill from the central library
-python3 skills/118-skill-linker/scripts/skill_manager.py link \
+python3 skills/e8-skill-linker/scripts/skill_manager.py link \
   --project . \
-  --source ~/.118-skill-linker/AgentSkills/write-blog
+  --source ~/.e8-skill-linker/AgentSkills/write-blog
 
 # Link multiple skills
-python3 skills/118-skill-linker/scripts/skill_manager.py link-many \
+python3 skills/e8-skill-linker/scripts/skill_manager.py link-many \
   --project . \
-  --sources ~/.118-skill-linker/AgentSkills/a,~/.118-skill-linker/AgentSkills/b
+  --sources ~/.e8-skill-linker/AgentSkills/a,~/.e8-skill-linker/AgentSkills/b
 
 # Disable a skill in the current project without deleting its source
-python3 skills/118-skill-linker/scripts/skill_manager.py unlink \
+python3 skills/e8-skill-linker/scripts/skill_manager.py unlink \
   --target .agents/skills/write-blog
 
 # Check Git repositories in the central library for updates
-python3 skills/118-skill-linker/scripts/skill_manager.py updates \
-  --central ~/.118-skill-linker/AgentSkills
+python3 skills/e8-skill-linker/scripts/skill_manager.py updates \
+  --central ~/.e8-skill-linker/AgentSkills
 ```
 
 `link`, `link-many`, and `migrate` reject sources that are not configured or authorized. Do not point links directly at arbitrary download directories, desktop folders, repository roots, or temporary directories.
@@ -197,14 +197,14 @@ python3 skills/118-skill-linker/scripts/skill_manager.py updates \
 Windows can use directory symlinks or junctions:
 
 ```powershell
-python skills\118-skill-linker\scripts\skill_manager.py init `
+python skills\e8-skill-linker\scripts\skill_manager.py init `
   --project . `
   --agents claude,codex `
   --link-type junction
 
-python skills\118-skill-linker\scripts\skill_manager.py link `
+python skills\e8-skill-linker\scripts\skill_manager.py link `
   --project . `
-  --source C:\Users\you\.118-skill-linker\AgentSkills\write-blog `
+  --source C:\Users\you\.e8-skill-linker\AgentSkills\write-blog `
   --link-type junction
 ```
 
@@ -222,11 +222,11 @@ Creating a symlink may require Developer Mode or an elevated terminal. An Agent 
 ## Repository Layout
 
 ```text
-118-skill-linker/
+e8-skill-linker/
 ├── README.md
 ├── README.zh-CN.md
 ├── skills/
-│   └── 118-skill-linker/
+│   └── e8-skill-linker/
 │       ├── SKILL.md
 │       ├── agents/
 │       │   └── openai.yaml
@@ -240,11 +240,11 @@ Creating a symlink may require Developer Mode or an elevated terminal. An Agent 
 This project follows the [Agent Skills Specification](https://agentskills.io/specification). After changing the skill, run at least:
 
 ```bash
-skills-ref validate skills/118-skill-linker
-python3 -m py_compile skills/118-skill-linker/scripts/skill_manager.py
+skills-ref validate skills/e8-skill-linker
+python3 -m py_compile skills/e8-skill-linker/scripts/skill_manager.py
 ```
 
-Detailed Agent workflows belong in `skills/118-skill-linker/references/`. README files are human-facing documentation and should not be the only source of Agent runtime rules.
+Detailed Agent workflows belong in `skills/e8-skill-linker/references/`. README files are human-facing documentation and should not be the only source of Agent runtime rules.
 
 ## License
 

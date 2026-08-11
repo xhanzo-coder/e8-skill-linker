@@ -6,7 +6,7 @@
 
 - 是否会写入配置文件；如果会，写明是用户级 `~/.skill-linker.json` 还是项目级 `.skill-linker.json`
 - 如果写入用户级配置，说明这会影响这台电脑上以后所有未设置项目级覆盖的项目
-- 如果用户提供的是自定义父目录，说明实际中央库会创建在 `<父目录>/.118-skill-linker/AgentSkills`
+- 如果用户提供的是自定义父目录，说明实际中央库会创建在 `<父目录>/.e8-skill-linker/AgentSkills`
 - 将创建哪些目录
 - 将创建哪些软链接，以及每个软链接指向哪里
 - 将跳过哪些已有目录或冲突项
@@ -24,7 +24,7 @@
 
 整理方案必须额外区分三种角色：
 
-- 中央目录：保存 skill 原件，默认应是非全局目录，例如 `/Users/name/.118-skill-linker/AgentSkills`
+- 中央目录：保存 skill 原件，默认应是非全局目录，例如 `/Users/name/.e8-skill-linker/AgentSkills`
 - 项目级入口目录：当前项目引用 skills 的入口，例如 `/abs/project/.agents/skills`
 - Agent 入口目录：Codex 或 Claude 在当前项目读取的入口，例如 `/abs/project/.codex/skills`、`/abs/project/.claude/skills`
 
@@ -45,8 +45,8 @@
 /abs/path/to/project
 
 中央目录：
-- [用户级配置][非全局中央目录][真实目录] ~/.118-skill-linker/AgentSkills
-  绝对路径：/Users/name/.118-skill-linker/AgentSkills
+- [用户级配置][非全局中央目录][真实目录] ~/.e8-skill-linker/AgentSkills
+  绝对路径：/Users/name/.e8-skill-linker/AgentSkills
 
 当前项目入口目录：
 - [项目级][通用 .agents][入口目录] .agents/skills
@@ -74,10 +74,10 @@
 | 动作 | 来源 | 目标 | 影响 | 是否删除真实目录 |
 | --- | --- | --- | --- | --- |
 | 写入用户级配置 | 无 | [用户级配置] /Users/name/.skill-linker.json | 后续未设置项目级覆盖的项目默认使用该中央目录 | 否 |
-| 创建中央命名空间目录 | [自定义父目录] /Users/name/Desktop/WorkSpace | [中央目录] /Users/name/Desktop/WorkSpace/.118-skill-linker/AgentSkills | skill 原件集中放在带 118-skill-linker 标识的目录下 | 否 |
-| 迁移 | [项目级][通用 .agents] /abs/project/.agents/skills/foo | [中央目录] /Users/name/.118-skill-linker/AgentSkills/foo | foo 原件进入中央目录 | 否 |
+| 创建中央命名空间目录 | [自定义父目录] /Users/name/Desktop/WorkSpace | [中央目录] /Users/name/Desktop/WorkSpace/.e8-skill-linker/AgentSkills | skill 原件集中放在带 e8-skill-linker 标识的目录下 | 否 |
+| 迁移 | [项目级][通用 .agents] /abs/project/.agents/skills/foo | [中央目录] /Users/name/.e8-skill-linker/AgentSkills/foo | foo 原件进入中央目录 | 否 |
 | 备份 | [项目级][Claude] /abs/project/.claude/skills | /abs/project/.skill-linker-backup/.../.claude/skills | 保留原目录副本 | 否 |
-| 建立软链接 | [项目级][通用 .agents] /abs/project/.agents/skills/foo | /Users/name/.118-skill-linker/AgentSkills/foo | 当前项目入口指向中央原件 | 否 |
+| 建立软链接 | [项目级][通用 .agents] /abs/project/.agents/skills/foo | /Users/name/.e8-skill-linker/AgentSkills/foo | 当前项目入口指向中央原件 | 否 |
 | 建立软链接 | [项目级][Claude] /abs/project/.claude/skills | ../.agents/skills | Claude 入口指向当前项目入口目录 | 否 |
 ```
 

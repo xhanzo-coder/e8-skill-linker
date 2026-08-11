@@ -15,9 +15,9 @@ from typing import Iterable
 
 PROJECT_SKILL_DIRS = [".agents/skills", ".codex/skills", ".claude/skills"]
 USER_SKILL_DIRS = ["~/.agents/skills", "~/.codex/skills", "~/.claude/skills"]
-DEFAULT_CENTRAL_DIR = "~/.118-skill-linker/AgentSkills"
+DEFAULT_CENTRAL_DIR = "~/.e8-skill-linker/AgentSkills"
 EXTRA_NON_GLOBAL_CENTRAL_DIRS = ["~/Skills"]
-CENTRAL_NAMESPACE = Path(".118-skill-linker") / "AgentSkills"
+CENTRAL_NAMESPACE = Path(".e8-skill-linker") / "AgentSkills"
 CONFIG_FILENAME = ".skill-linker.json"
 VALID_DEFAULT_MODES = {"ask", "centralize", "project-local"}
 IS_WINDOWS = platform.system() == "Windows"
@@ -135,7 +135,7 @@ def global_dir_warning(path: Path, home: Path) -> str | None:
         return None
     return (
         "该路径是 Agent 全局 skills 目录。把中央库放在这里可能让其中的 skills 对所有项目全局可见；"
-        "如果只是集中存放 skill 原件，推荐使用 ~/.118-skill-linker/AgentSkills。"
+        "如果只是集中存放 skill 原件，推荐使用 ~/.e8-skill-linker/AgentSkills。"
     )
 
 
@@ -143,8 +143,8 @@ def namespace_warning(path: Path) -> str | None:
     if has_central_namespace(path):
         return None
     return (
-        "该 central 路径没有包含 .118-skill-linker/AgentSkills 命名空间。"
-        "如果用户给的是想放置中央库的父目录，请使用 --central-base，让脚本自动派生 <父目录>/.118-skill-linker/AgentSkills。"
+        "该 central 路径没有包含 .e8-skill-linker/AgentSkills 命名空间。"
+        "如果用户给的是想放置中央库的父目录，请使用 --central-base，让脚本自动派生 <父目录>/.e8-skill-linker/AgentSkills。"
     )
 
 
@@ -447,30 +447,30 @@ def install_self(args: argparse.Namespace) -> int:
     home = expand(args.home)
     source = expand(args.source) if args.source else Path(__file__).resolve(strict=False).parents[1]
     if not source.exists() or not source.is_dir() or not (source / "SKILL.md").exists():
-        raise SystemExit(f"source 必须是包含 SKILL.md 的 118-skill-linker 目录: {source}")
+        raise SystemExit(f"source 必须是包含 SKILL.md 的 e8-skill-linker 目录: {source}")
     agents = parse_agents(args.agents)
-    primary = user_global_skill_dir(home, "agents") / "118-skill-linker"
+    primary = user_global_skill_dir(home, "agents") / "e8-skill-linker"
     plan = {
         "source": str(source),
         "install_primary": str(primary),
         "mode": args.mode,
         "agent_entries": [],
         "will_overwrite": False,
-        "note": "118-skill-linker 是管理型 skill，可作为例外安装到用户级全局目录；业务型 skills 不应因此默认全局安装。",
+        "note": "e8-skill-linker 是管理型 skill，可作为例外安装到用户级全局目录；业务型 skills 不应因此默认全局安装。",
     }
     if primary.exists() or primary.is_symlink():
         plan["existing_primary"] = classify(primary)
         if not args.replace:
             print(json.dumps({"planned_install_self": plan}, ensure_ascii=False, indent=2))
-            raise SystemExit("全局 118-skill-linker 已存在；默认不覆盖。确认替换时传入 --replace")
+            raise SystemExit("全局 e8-skill-linker 已存在；默认不覆盖。确认替换时传入 --replace")
         plan["will_overwrite"] = True
     for agent in agents:
-        entry = user_global_skill_dir(home, agent) / "118-skill-linker"
+        entry = user_global_skill_dir(home, agent) / "e8-skill-linker"
         target = primary if agent != "agents" else source
         plan["agent_entries"].append({"agent": agent, "path": str(entry), "target": str(target)})
     print(json.dumps({"planned_install_self": plan}, ensure_ascii=False, indent=2))
     if not args.execute:
-        print("当前只是 dry-run；用户确认后再传入 --execute 安装 118-skill-linker")
+        print("当前只是 dry-run；用户确认后再传入 --execute 安装 e8-skill-linker")
         return 0
     if primary.exists() or primary.is_symlink():
         if primary.is_symlink() or primary.is_file():
@@ -485,7 +485,7 @@ def install_self(args: argparse.Namespace) -> int:
     for agent in agents:
         if agent == "agents":
             continue
-        entry = user_global_skill_dir(home, agent) / "118-skill-linker"
+        entry = user_global_skill_dir(home, agent) / "e8-skill-linker"
         create_symlink(entry, primary, True, args.link_type)
     print(json.dumps({"installed_self": plan}, ensure_ascii=False, indent=2))
     return 0

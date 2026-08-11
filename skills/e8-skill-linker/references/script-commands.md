@@ -22,13 +22,13 @@ python3 scripts/skill_manager.py config --project .
 python3 scripts/skill_manager.py check --project .
 ```
 
-以 dry-run 方式写入用户级中央目录配置。默认推荐使用 `118-skill-linker` 专属的非全局目录，不要默认写成 `~/.agents/skills`：
+以 dry-run 方式写入用户级中央目录配置。默认推荐使用 `e8-skill-linker` 专属的非全局目录，不要默认写成 `~/.agents/skills`：
 
 ```bash
-python3 scripts/skill_manager.py config --scope user --central ~/.118-skill-linker/AgentSkills --mode centralize
+python3 scripts/skill_manager.py config --scope user --central ~/.e8-skill-linker/AgentSkills --mode centralize
 ```
 
-如果用户提供的是自定义父目录，使用 `--central-base`，脚本会自动派生 `<父目录>/.118-skill-linker/AgentSkills`：
+如果用户提供的是自定义父目录，使用 `--central-base`，脚本会自动派生 `<父目录>/.e8-skill-linker/AgentSkills`：
 
 ```bash
 python3 scripts/skill_manager.py config --scope user --central-base "/Users/name/Desktop/WorkSpace" --mode centralize
@@ -37,21 +37,21 @@ python3 scripts/skill_manager.py config --scope user --central-base "/Users/name
 用户确认后写入：
 
 ```bash
-python3 scripts/skill_manager.py config --scope user --central ~/.118-skill-linker/AgentSkills --mode centralize --execute
+python3 scripts/skill_manager.py config --scope user --central ~/.e8-skill-linker/AgentSkills --mode centralize --execute
 ```
 
 ## 自举安装
 
-以 dry-run 方式把 `118-skill-linker` 自身安装到用户级全局目录，便于新项目自动召回：
+以 dry-run 方式把 `e8-skill-linker` 自身安装到用户级全局目录，便于新项目自动召回：
 
 ```bash
-python3 scripts/skill_manager.py install-self --source /path/to/118-skill-linker --agents agents,codex,claude
+python3 scripts/skill_manager.py install-self --source /path/to/e8-skill-linker --agents agents,codex,claude
 ```
 
 用户确认后执行：
 
 ```bash
-python3 scripts/skill_manager.py install-self --source /path/to/118-skill-linker --agents agents,codex,claude --execute
+python3 scripts/skill_manager.py install-self --source /path/to/e8-skill-linker --agents agents,codex,claude --execute
 ```
 
 ## 初始化与链接
@@ -71,19 +71,19 @@ python3 scripts/skill_manager.py init --project . --agents claude,codex --execut
 以 dry-run 方式链接单个 skill：
 
 ```bash
-python3 scripts/skill_manager.py link --project . --source ~/.118-skill-linker/AgentSkills/write-blog
+python3 scripts/skill_manager.py link --project . --source ~/.e8-skill-linker/AgentSkills/write-blog
 ```
 
 用户确认后执行：
 
 ```bash
-python3 scripts/skill_manager.py link --project . --source ~/.118-skill-linker/AgentSkills/write-blog --execute
+python3 scripts/skill_manager.py link --project . --source ~/.e8-skill-linker/AgentSkills/write-blog --execute
 ```
 
 以 dry-run 方式把多个 skills 链接到当前项目：
 
 ```bash
-python3 scripts/skill_manager.py link-many --project . --sources ~/.118-skill-linker/AgentSkills/a,~/.118-skill-linker/AgentSkills/b
+python3 scripts/skill_manager.py link-many --project . --sources ~/.e8-skill-linker/AgentSkills/a,~/.e8-skill-linker/AgentSkills/b
 ```
 
 `link` 和 `link-many` 会拒绝不在当前生效中央库或当前项目 `.agents/skills` 内的源路径。

@@ -1,9 +1,9 @@
 ---
-name: 118-skill-linker
-description: 管理、安装、链接、迁移、同步和更新 Agent skills 的中央库与项目入口。用户说“安装一个 skill”“帮我整理 skills”“这个项目启用某个 skill”“同步 Codex/Claude/.agents skills”“把 skill 放到中央库”“检查 skill 更新”“删除/停用 skill”“为什么新项目读不到 skill”“把 118-skill-linker 装到全局”“初始化 .agents/.codex/.claude/skills”“修复失效软链接”“切换 skill 版本”“fork/更新别人写的 skill”时使用。用于检查和配置 .skill-linker.json、推荐非全局中央库 ~/.118-skill-linker/AgentSkills、区分 Agent 全局 skills 目录与项目级 skills 入口、把业务 skills 按项目软链接启用、以及在确认后将 118-skill-linker 作为管理型 skill 安装到用户级全局目录以便新项目自动召回。
+name: e8-skill-linker
+description: 管理、安装、链接、迁移、同步和更新 Agent skills 的中央库与项目入口。用户说“安装一个 skill”“帮我整理 skills”“这个项目启用某个 skill”“同步 Codex/Claude/.agents skills”“把 skill 放到中央库”“检查 skill 更新”“删除/停用 skill”“为什么新项目读不到 skill”“把 e8-skill-linker 装到全局”“初始化 .agents/.codex/.claude/skills”“修复失效软链接”“切换 skill 版本”“fork/更新别人写的 skill”时使用。用于检查和配置 .skill-linker.json、推荐非全局中央库 ~/.e8-skill-linker/AgentSkills、区分 Agent 全局 skills 目录与项目级 skills 入口、把业务 skills 按项目软链接启用、以及在确认后将 e8-skill-linker 作为管理型 skill 安装到用户级全局目录以便新项目自动召回。
 ---
 
-# 118 Skill Linker
+# E8 Skill Linker
 
 ## 核心职责
 
@@ -16,8 +16,8 @@ description: 管理、安装、链接、迁移、同步和更新 Agent skills �
 - 除非用户明确要求某个安全的写入操作，否则先从只读检查开始。
 - 在把某个目录视为中央 skills 目录前，必须先让用户确认。
 - 不要默认把 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 当作中央库；这些是 Agent 全局发现目录。
-- 首次没有配置时，默认推荐非全局中央目录：macOS/Linux 使用 `~/.118-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.118-skill-linker\AgentSkills`。
-- 用户提供自定义父目录时，实际中央库必须派生为 `<父目录>/.118-skill-linker/AgentSkills`，不要把 skill 原件直接散放在父目录下。
+- 首次没有配置时，默认推荐非全局中央目录：macOS/Linux 使用 `~/.e8-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.e8-skill-linker\AgentSkills`。
+- 用户提供自定义父目录时，实际中央库必须派生为 `<父目录>/.e8-skill-linker/AgentSkills`，不要把 skill 原件直接散放在父目录下。
 - 创建软链接时，链接目标只能指向已配置的中央 skills 库，或当前项目的项目级 skills 入口目录。不要把任意下载目录、临时目录、桌面目录、仓库根目录或其他未授权路径直接作为软链接目标。
 - 在同步或迁移前，列出所有计划创建、替换、跳过、备份、删除或 git 操作，并等待用户确认。
 - 不要用软链接覆盖已有的真实目录。
@@ -49,12 +49,12 @@ description: 管理、安装、链接、迁移、同步和更新 Agent skills �
 
 ## 自举提醒
 
-每次触发后，先判断 `118-skill-linker` 自己是否已经安装在用户级全局 Agent skills 目录中，例如 `~/.agents/skills/118-skill-linker`。如果当前加载的是项目级副本或非全局中央库副本，先说明它是管理型 skill，建议作为例外安装到用户级全局目录，以便新项目和新对话能自动召回它。业务型 skills 仍然不默认全局安装。
+每次触发后，先判断 `e8-skill-linker` 自己是否已经安装在用户级全局 Agent skills 目录中，例如 `~/.agents/skills/e8-skill-linker`。如果当前加载的是项目级副本或非全局中央库副本，先说明它是管理型 skill，建议作为例外安装到用户级全局目录，以便新项目和新对话能自动召回它。业务型 skills 仍然不默认全局安装。
 
 不要自动迁移或安装。给出计划并等待用户确认。推荐确认口令：
 
 ```text
-确认全局安装 118-skill-linker
+确认全局安装 e8-skill-linker
 ```
 
 详细流程见 [references/bootstrap-and-central-library.md](references/bootstrap-and-central-library.md)。
