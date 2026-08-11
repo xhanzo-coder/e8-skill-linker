@@ -71,20 +71,22 @@ python3 scripts/skill_manager.py init --project . --agents claude,codex --execut
 以 dry-run 方式链接单个 skill：
 
 ```bash
-python3 scripts/skill_manager.py link --project . --source ~/GitHub/my-skills/skills/write-blog
+python3 scripts/skill_manager.py link --project . --source ~/.118-skill-linker/AgentSkills/write-blog
 ```
 
 用户确认后执行：
 
 ```bash
-python3 scripts/skill_manager.py link --project . --source ~/GitHub/my-skills/skills/write-blog --execute
+python3 scripts/skill_manager.py link --project . --source ~/.118-skill-linker/AgentSkills/write-blog --execute
 ```
 
 以 dry-run 方式把多个 skills 链接到当前项目：
 
 ```bash
-python3 scripts/skill_manager.py link-many --project . --sources ~/GitHub/my-skills/skills/a,~/GitHub/my-skills/skills/b
+python3 scripts/skill_manager.py link-many --project . --sources ~/.118-skill-linker/AgentSkills/a,~/.118-skill-linker/AgentSkills/b
 ```
+
+`link` 和 `link-many` 会拒绝不在当前生效中央库或当前项目 `.agents/skills` 内的源路径。
 
 以 dry-run 方式从当前项目停用某个 skill。此命令只删除软链接或 junction，不删除中央原件：
 
@@ -105,6 +107,8 @@ python3 scripts/skill_manager.py unlink --target .agents/skills/write-blog --exe
 ```bash
 python3 scripts/skill_manager.py migrate --source ~/.claude/skills/write-blog --central ~/GitHub/my-skills/skills
 ```
+
+`migrate --central` 必须等于当前生效配置中的中央 skills 库；不要临时指定未配置目录。
 
 ## Git 与仓库
 

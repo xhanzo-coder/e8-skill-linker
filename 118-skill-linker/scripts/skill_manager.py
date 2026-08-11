@@ -328,6 +328,37 @@ def resolve_link_target(link: Path, target: Path) -> Path:
     return (link.parent / target).resolve(strict=False)
 
 
+def is_path_inside(path: Path, root: Path) -> bool:
+    probe = path.resolve(strict=False)
+    base = root.resolve(strict=False)
+    return probe == base or base in probe.parents
+
+
+def configured_central(project: Path, home: Path) -> Path:
+    config = load_effective_config(project, home)
+    if config.get("source") == "error":
+        raise SystemExit(f"中央库配置错误: {config['error']}")
+    central_raw = config.get("central_skills_dir")
+    if not central_raw:
+        raise SystemExit("未配置 central_skills_dir；拒绝创建指向未授权目录的软链接")
+    central = expand_with_home(central_raw, home)
+    if not central.exists() or not central.is_dir():
+        raise SystemExit(f"已配置中央库不存在或不是目录: {central}")
+    return central
+
+
+def require_allowed_link_target(link: Path, target: Path, allowed_roots: Iterable[Path]) -> None:
+    target_abs = resolve_link_target(link, target)
+    roots = list(allowed_roots)
+    if any(is_path_inside(target_abs, root) for root in roots):
+        return
+    allowed = [str(root.resolve(strict=False)) for root in roots]
+    raise SystemExit(
+        "拒绝创建指向未授权目录的软链接。"
+        f" link={link} target={target_abs} allowed_roots={json.dumps(allowed, ensure_ascii=False)}"
+    )
+
+
 def create_windows_junction(link: Path, target: Path) -> None:
     target_abs = resolve_link_target(link, target)
     result = subprocess.run(
@@ -353,9 +384,17 @@ def windows_link_help(link: Path, target: Path, error: OSError) -> str:
     )
 
 
-def create_symlink(link: Path, target: Path, execute: bool, link_type: str = "auto") -> None:
+def create_symlink(
+    link: Path,
+    target: Path,
+    execute: bool,
+    link_type: str = "auto",
+    allowed_roots: Iterable[Path] | None = None,
+) -> None:
     if link_type == "junction" and not IS_WINDOWS:
         raise SystemExit("junction 仅适用于 Windows；macOS/Linux 请使用 auto 或 symlink")
+    if allowed_roots is not None:
+        require_allowed_link_target(link, target, allowed_roots)
     if link.exists() or link.is_symlink():
         current = classify(link)
         print(f"跳过已存在路径: {link} ({json.dumps(current, ensure_ascii=False)})")
@@ -459,9 +498,21 @@ def init(args: argparse.Namespace) -> int:
     hub = project / ".agents" / "skills"
     for agent in parse_agents(args.agents):
         if agent == "claude":
-            create_symlink(project / ".claude" / "skills", Path("..") / ".agents" / "skills", execute, args.link_type)
+            create_symlink(
+                project / ".claude" / "skills",
+                Path("..") / ".agents" / "skills",
+                execute,
+                args.link_type,
+                allowed_roots=[hub],
+            )
         elif agent == "codex":
-            create_symlink(project / ".codex" / "skills", Path("..") / ".agents" / "skills", execute, args.link_type)
+            create_symlink(
+                project / ".codex" / "skills",
+                Path("..") / ".agents" / "skills",
+                execute,
+                args.link_type,
+                allowed_roots=[hub],
+            )
         elif agent == "agents":
             ensure_project_hub(project, execute)
         else:
@@ -473,7 +524,15 @@ def init(args: argparse.Namespace) -> int:
 
 def link(args: argparse.Namespace) -> int:
     project = expand(args.project)
+    home = expand(args.home)
     source = expand(args.source)
+    central = configured_central(project, home)
+    project_hub = project / ".agents" / "skills"
+    if not any(is_path_inside(source, root) for root in (central, project_hub)):
+        raise SystemExit(
+            "source 必须位于已配置中央 skills 库或当前项目 skills 库内；"
+            f"source={source} central={central} project_hub={project_hub}"
+        )
     if not source.exists() or not source.is_dir():
         raise SystemExit(f"源路径不存在或不是目录: {source}")
     if not (source / "SKILL.md").exists():
@@ -481,7 +540,7 @@ def link(args: argparse.Namespace) -> int:
     name = args.name or source.name
     target = project / ".agents" / "skills" / name
     ensure_project_hub(project, args.execute)
-    create_symlink(target, source, args.execute, args.link_type)
+    create_symlink(target, source, args.execute, args.link_type, allowed_roots=[central, project_hub])
     if not args.execute:
         print("当前只是 dry-run；用户确认后再传入 --execute 执行")
     return 0
@@ -499,6 +558,7 @@ def link_many(args: argparse.Namespace) -> int:
             name=None,
             execute=args.execute,
             link_type=args.link_type,
+            home=args.home,
         )
         try:
             link(child_args)
@@ -557,8 +617,13 @@ def unlink(args: argparse.Namespace) -> int:
 
 
 def migrate(args: argparse.Namespace) -> int:
+    project = expand(args.project)
+    home = expand(args.home)
     source = expand(args.source)
     central = expand(args.central)
+    expected_central = configured_central(project, home)
+    if central != expected_central:
+        raise SystemExit(f"central 必须等于当前生效配置中的中央库: {expected_central}")
     if source.is_symlink():
         raise SystemExit(f"源路径已经是软链接，不需要迁移: {source}")
     if not source.exists() or not source.is_dir():
@@ -582,7 +647,7 @@ def migrate(args: argparse.Namespace) -> int:
         return 0
     central.mkdir(parents=True, exist_ok=True)
     shutil.move(str(source), str(target))
-    create_symlink(source, target, True, args.link_type)
+    create_symlink(source, target, True, args.link_type, allowed_roots=[expected_central])
     print(json.dumps({"migrated": plan}, ensure_ascii=False, indent=2))
     return 0
 
@@ -805,6 +870,7 @@ def main() -> int:
 
     link_parser = sub.add_parser("link")
     link_parser.add_argument("--project", default=".")
+    link_parser.add_argument("--home", default="~")
     link_parser.add_argument("--source", required=True)
     link_parser.add_argument("--name")
     link_parser.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
@@ -813,6 +879,7 @@ def main() -> int:
 
     link_many_parser = sub.add_parser("link-many")
     link_many_parser.add_argument("--project", default=".")
+    link_many_parser.add_argument("--home", default="~")
     link_many_parser.add_argument("--sources", required=True)
     link_many_parser.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
     link_many_parser.add_argument("--execute", action="store_true")
@@ -857,6 +924,8 @@ def main() -> int:
     clone_parser.set_defaults(func=clone)
 
     migrate_parser = sub.add_parser("migrate")
+    migrate_parser.add_argument("--project", default=".")
+    migrate_parser.add_argument("--home", default="~")
     migrate_parser.add_argument("--source", required=True)
     migrate_parser.add_argument("--central", required=True)
     migrate_parser.add_argument("--name")

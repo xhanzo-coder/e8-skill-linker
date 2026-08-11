@@ -18,6 +18,7 @@ description: 管理、安装、链接、迁移、同步和更新 Agent skills �
 - 不要默认把 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 当作中央库；这些是 Agent 全局发现目录。
 - 首次没有配置时，默认推荐非全局中央目录：macOS/Linux 使用 `~/.118-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.118-skill-linker\AgentSkills`。
 - 用户提供自定义父目录时，实际中央库必须派生为 `<父目录>/.118-skill-linker/AgentSkills`，不要把 skill 原件直接散放在父目录下。
+- 创建软链接时，链接目标只能指向已配置的中央 skills 库，或当前项目的项目级 skills 入口目录。不要把任意下载目录、临时目录、桌面目录、仓库根目录或其他未授权路径直接作为软链接目标。
 - 在同步或迁移前，列出所有计划创建、替换、跳过、备份、删除或 git 操作，并等待用户确认。
 - 不要用软链接覆盖已有的真实目录。
 - 用户说“删除 skill”时，默认理解为“从当前项目停用”，只删除入口链接；不要删除真实 skill 目录，除非用户明确要求删除那个具体目录。
