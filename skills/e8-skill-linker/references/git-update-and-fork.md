@@ -22,7 +22,7 @@
 
 默认不要联网检查；如果需要知道远端是否有新提交，先说明会运行 `git fetch --prune`，获得用户确认后再执行。
 
-运行 `git pull` 前，报告仓库路径以及是否有本地改动；有本地改动时默认不要更新。
+运行 `git pull` 前，报告仓库路径、当前分支、upstream 以及是否有本地改动。有本地改动、detached HEAD 或没有 upstream 时默认不要更新。更新只能使用 `git pull --ff-only`；无法 fast-forward 时停止，让用户处理分支差异。
 
 如果用户问“哪个下载的 skill 更新了”，先确认中央 skills 目录，然后运行 `updates --central <目录>`。如果结果可能过期，说明它只是本地远端跟踪信息；询问用户是否允许获取远端信息，确认后再运行 `updates --central <目录> --execute`。只在用户明确确认后，才对具体仓库运行 `update --repo <仓库> --execute`。
 
@@ -33,6 +33,8 @@
 如果用户需要固定某个版本，先运行 `git-status` 查看本地改动和当前分支，再说明将执行 `git checkout <ref>`。
 
 有本地改动时默认不要切换；用户确认风险后才能使用 `--allow-dirty`。
+
+拒绝以 `-` 开头的 checkout ref，避免把用户输入解释成 Git 命令选项。
 
 ## Fork 决策
 

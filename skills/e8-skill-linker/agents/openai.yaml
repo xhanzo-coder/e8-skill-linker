@@ -1,4 +1,4 @@
 interface:
   display_name: "E8 Skill Linker"
-  short_description: "全局管理入口，按项目链接 skills"
+  short_description: "集中管理、迁移并按项目安全链接 Agent skills"
   default_prompt: "使用 $e8-skill-linker 检查自身是否已全局安装，读取中央目录配置，并安全安装、链接、迁移或更新当前项目的 Agent skills。"

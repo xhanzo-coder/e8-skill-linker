@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a workflow or safety improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the user workflow that is currently difficult or unsafe.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Skill instructions
+        - Python manager script
+        - macOS/Linux links
+        - Windows links or junctions
+        - Git update workflow
+        - Documentation
+    validations:
+      required: true

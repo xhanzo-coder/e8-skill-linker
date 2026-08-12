@@ -23,6 +23,8 @@ e8-skill-linker 是管理型 skill。为了让新项目和新对话能自动召�
 
 确认后再执行安装。优先把当前稳定副本复制/同步到 `~/.agents/skills/e8-skill-linker`；如果当前 Agent 需要 `~/.codex/skills` 或 `~/.claude/skills` 才能全局发现，则再创建对应全局入口链接。不要把所有业务 skills 一起迁移到全局目录。
 
+如果全局 `e8-skill-linker` 已存在，默认停止并报告当前路径。用户明确确认替换时，先把旧副本移动到同级带 UTC 时间戳的备份目录，再安装新副本；不要直接删除旧副本。多个 Agent 入口必须先全部预检，任一冲突时不开始写入。
+
 ## 配置文件
 
 支持用 `.skill-linker.json` 记住用户已经确认过的中央 skills 目录。
@@ -101,6 +103,8 @@ Windows 配置示例：
 10. 在没有配置且用户未确认中央目录前，不要执行迁移、同步、替换或 git 更新。
 
 如果没有发现明显的中央目录，推荐 `~/.e8-skill-linker/AgentSkills` 或 Windows 的 `%USERPROFILE%\.e8-skill-linker\AgentSkills`，并询问用户是否接受或自定义父目录；不要自行创建中央目录，除非用户明确同意。
+
+脚本执行层也会强制这些确认：全局 Agent 目录需要 `--allow-global-central`，不含标准命名空间的最终路径需要 `--allow-non-namespaced-central`。Agent 只能在用户已经明确确认对应风险后添加参数。
 
 ## 反例
 

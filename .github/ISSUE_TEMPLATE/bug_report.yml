@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible problem with E8 Skill Linker
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include secrets, tokens, or private repository URLs.
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Linux
+        - Windows
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.13.1"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or Agent request
+      description: Include the exact command or prompt that produced the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and output
+    validations:
+      required: true
+  - type: textarea
+    id: layout
+    attributes:
+      label: Relevant directory layout
+      description: Redact usernames and private paths when needed.

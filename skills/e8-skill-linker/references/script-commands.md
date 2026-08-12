@@ -22,6 +22,12 @@ python3 scripts/skill_manager.py config --project .
 python3 scripts/skill_manager.py check --project .
 ```
 
+同时检查用户级 Agent 目录和已配置的中央库：
+
+```bash
+python3 scripts/skill_manager.py check --project . --include-user --include-central
+```
+
 以 dry-run 方式写入用户级中央目录配置。默认推荐使用 `e8-skill-linker` 专属的非全局目录，不要默认写成 `~/.agents/skills`：
 
 ```bash
@@ -40,6 +46,8 @@ python3 scripts/skill_manager.py config --scope user --central-base "/Users/name
 python3 scripts/skill_manager.py config --scope user --central ~/.e8-skill-linker/AgentSkills --mode centralize --execute
 ```
 
+如果用户明确选择 Agent 全局 skills 目录作为中央库，执行时必须增加 `--allow-global-central`。如果用户明确把一个不含 `.e8-skill-linker/AgentSkills` 命名空间的路径作为最终中央目录，执行时必须增加 `--allow-non-namespaced-central`。这两个参数只表示用户已经理解并确认风险，不能由 Agent 擅自添加。
+
 ## 自举安装
 
 以 dry-run 方式把 `e8-skill-linker` 自身安装到用户级全局目录，便于新项目自动召回：
@@ -53,6 +61,8 @@ python3 scripts/skill_manager.py install-self --source /path/to/e8-skill-linker 
 ```bash
 python3 scripts/skill_manager.py install-self --source /path/to/e8-skill-linker --agents agents,codex,claude --execute
 ```
+
+如果全局副本已经存在，脚本默认停止。用户明确确认替换后增加 `--replace --execute`；旧副本会移动到同级的 `e8-skill-linker.backup-<UTC 时间>`，不会直接删除。
 
 ## 初始化与链接
 
@@ -87,6 +97,8 @@ python3 scripts/skill_manager.py link-many --project . --sources ~/.e8-skill-lin
 ```
 
 `link` 和 `link-many` 会拒绝不在当前生效中央库或当前项目 `.agents/skills` 内的源路径。
+
+`link-many` 会先验证所有源、目标名称和目标冲突；任何一项失败时，不创建任何链接。
 
 以 dry-run 方式从当前项目停用某个 skill。此命令只删除软链接或 junction，不删除中央原件：
 
@@ -136,6 +148,8 @@ python3 scripts/skill_manager.py updates --central ~/GitHub/my-skills/skills --e
 python3 scripts/skill_manager.py update --repo ~/GitHub/my-skills --execute
 ```
 
+`update` 要求当前分支有 upstream，并使用 `git pull --ff-only`。仓库有本地改动、处于 detached HEAD、没有 upstream 或无法 fast-forward 时停止，不自动覆盖或合并。
+
 以 dry-run 方式克隆 skill 仓库到中央仓库父目录：
 
 ```bash
@@ -153,6 +167,8 @@ python3 scripts/skill_manager.py clone --repo-url https://github.com/user/some-s
 ```bash
 python3 scripts/skill_manager.py checkout --repo ~/GitHub/my-skills --ref v1.2.0
 ```
+
+确认后增加 `--execute`。仓库有本地改动时默认停止；只有用户理解风险并明确确认后才可增加 `--allow-dirty`。
 
 ## Windows
 
