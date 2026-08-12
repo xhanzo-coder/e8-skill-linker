@@ -508,8 +508,9 @@ class SkillManagerTests(unittest.TestCase):
         self.assertEqual(result, 0)
         cloned = destination_parent / "downloaded-skill"
         self.assertTrue((cloned / "skills" / "demo" / "SKILL.md").is_file())
-        report = output.getvalue()
-        self.assertIn(str(cloned / "skills" / "demo"), report)
+        expected_skill = (cloned / "skills" / "demo").resolve(strict=False)
+        discovered = [Path(path).resolve(strict=False) for path in skill_manager.skill_dirs_in_repo(cloned)]
+        self.assertEqual(discovered, [expected_skill])
 
     def test_find_git_repos_does_not_treat_parent_repo_as_central_repo(self) -> None:
         outer = self.root / "outer"

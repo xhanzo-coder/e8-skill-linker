@@ -23,7 +23,7 @@ CENTRAL_NAMESPACE = Path(".e8-skill-linker") / "AgentSkills"
 CONFIG_FILENAME = ".skill-linker.json"
 VALID_DEFAULT_MODES = {"ask", "centralize", "project-local"}
 IS_WINDOWS = platform.system() == "Windows"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 
 
 def expand(path: str | Path) -> Path:
