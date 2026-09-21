@@ -28,10 +28,15 @@ The manager is designed to:
 
 - Dry-run mutating operations unless `--execute` is supplied.
 - Restrict project links to the configured central library or project skill hub.
-- Reject path-like skill names and option-like Git refs or repository URLs.
+- Reject path-like skill names, repository subpath traversal, and option-like Git refs or repository URLs.
 - Refuse to overwrite real directories with links.
+- Keep complete Git sources under the selected central library's `.repos` directory and validate planned skill names against `SKILL.md` before exposing them.
+- Roll back repositories and links created by a failed transactional installation, including read-only Git objects on Windows.
+- Validate `.skill-linker-lock.json` before trusting recorded repository paths or revisions.
 - Preserve central sources when a project link is removed.
-- Refuse Git pulls for dirty repositories by default and require an upstream.
+- Refuse updates for dirty repositories and require an upstream. Inspect registered skill identities in the fetched candidate, fast-forward to that exact commit, then validate entries before recording the new revision.
+- Preserve project links through stable central entries, including Windows junctions; compare immediate targets instead of treating flattened links as equivalent.
+- Store management-skill replacement backups outside Agent discovery directories.
 - Avoid silent privilege elevation on Windows.
 
 The manager may still execute networked Git operations after explicit user

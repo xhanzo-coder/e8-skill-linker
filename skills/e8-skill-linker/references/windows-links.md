@@ -21,6 +21,8 @@ Windows 可以使用中央目录 + 项目链接方案，但链接机制和权限
 - 在 Windows 上，`auto` 会先尝试 symlink；如果权限不足，会尝试 junction。
 - 如果 junction 也失败，向用户说明 Developer Mode、管理员终端和手动 `mklink /J` 命令。
 - 用户明确想使用 junction 时，传入 `--link-type junction`。
+- 创建 junction 时保留目标的绝对入口路径，不展开目标链接。例如项目 junction 指向 `中央库/writer`，中央入口再指向 `.repos/.../skills/writer`。权限检查仍验证最终目标位于允许的库内。
+- 历史项目 junction 可能直接指向 `.repos`，不会自动重建。`check` 报告直接目标；迁移这些项目入口需要列出明确计划。
 
 Agent 引导用户时可以这样说明：
 

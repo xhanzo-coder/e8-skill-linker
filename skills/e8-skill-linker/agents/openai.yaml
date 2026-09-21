@@ -1,4 +1,4 @@
 interface:
   display_name: "E8 Skill Linker"
-  short_description: "集中管理、迁移并按项目安全链接 Agent skills"
-  default_prompt: "使用 $e8-skill-linker 检查自身是否已全局安装，读取中央目录配置，并安全安装、链接、迁移或更新当前项目的 Agent skills。"
+  short_description: "管理命名中央库、Git 来源和项目 skills 入口"
+  default_prompt: "使用 $e8-skill-linker 检查当前活动中央库，并安全安装 Git 来源、启用项目 skills 或检查更新。"

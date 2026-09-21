@@ -27,7 +27,9 @@ This repository contains one skill at `skills/e8-skill-linker/`:
 
 The central skill library and Agent global directories are different things:
 
-- The central library stores skill sources. The default is `~/.e8-skill-linker/AgentSkills`.
+- The central-library root stores discoverable skill sources or entries. The default is `~/.e8-skill-linker/AgentSkills`.
+- Complete third-party Git repositories live under `<central>/.repos/<host>/<owner>/<repo>`; root-level skill symlinks or junctions point to skill directories inside them.
+- `<central>/.skill-linker-lock.json` records repository sources, current revisions, subpaths, and exposed central skill entries.
 - Common macOS/Linux Agent global directories include `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`.
 - On Windows, the default central library is `%USERPROFILE%\.e8-skill-linker\AgentSkills`.
 - Project-level `.agents/skills`, `.codex/skills`, and `.claude/skills` are entry points for the current project.
@@ -98,7 +100,7 @@ When triggered for the first time, the skill follows this sequence:
 3. If no configuration exists, recommend a non-global central library: `~/.e8-skill-linker/AgentSkills` on macOS/Linux or `%USERPROFILE%\.e8-skill-linker\AgentSkills` on Windows.
 4. Accept a custom parent directory and derive `<parent>/.e8-skill-linker/AgentSkills` beneath it.
 5. Inspect project-level and user-level skills in read-only mode and show sources, targets, and impacts separately.
-6. Present a plan and wait for confirmation before configuring, migrating, syncing, linking, removing, cloning, or running Git updates.
+6. Combine configuration, repository storage, central entries, and optional project entries into one reviewable plan; execute after scope-specific confirmation. Repository installation rolls back its new content on failure; Git updates validate candidates before applying them.
 
 By default, `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills` are not treated as the central library. If a user chooses one of these global directories, the skill must explain that the skills may become visible to every project and request explicit confirmation.
 
@@ -120,13 +122,22 @@ The project-level configuration file is:
 <project-root>/.skill-linker.json
 ```
 
-Project-level configuration takes precedence over user-level configuration. For personal use, configure one user-level central library. Use project-level configuration for team-shared, customer-isolated, or test-specific libraries.
+Project-level configuration completely overrides user-level configuration. Schema v2 can register multiple named central libraries, while each effective configuration selects exactly one `active_library`.
 
 Example:
 
 ```json
 {
-  "central_skills_dir": "/Users/you/.e8-skill-linker/AgentSkills",
+  "schema_version": 2,
+  "libraries": {
+    "personal": {
+      "path": "/Users/you/.e8-skill-linker/AgentSkills"
+    },
+    "work": {
+      "path": "/Volumes/Work/.e8-skill-linker/AgentSkills"
+    }
+  },
+  "active_library": "personal",
   "default_mode": "centralize"
 }
 ```
@@ -135,7 +146,13 @@ Windows example:
 
 ```json
 {
-  "central_skills_dir": "C:\\Users\\you\\.e8-skill-linker\\AgentSkills",
+  "schema_version": 2,
+  "libraries": {
+    "personal": {
+      "path": "C:\\Users\\you\\.e8-skill-linker\\AgentSkills"
+    }
+  },
+  "active_library": "personal",
   "default_mode": "centralize"
 }
 ```
@@ -145,6 +162,7 @@ Run a dry-run first:
 ```bash
 python3 skills/e8-skill-linker/scripts/skill_manager.py config \
   --scope user \
+  --library personal \
   --central ~/.e8-skill-linker/AgentSkills \
   --mode centralize
 ```
@@ -154,6 +172,7 @@ After confirmation, execute the change:
 ```bash
 python3 skills/e8-skill-linker/scripts/skill_manager.py config \
   --scope user \
+  --library personal \
   --central ~/.e8-skill-linker/AgentSkills \
   --mode centralize \
   --execute
@@ -164,6 +183,7 @@ When the user provides a custom parent directory, use `--central-base`. The actu
 ```bash
 python3 skills/e8-skill-linker/scripts/skill_manager.py config \
   --scope user \
+  --library personal \
   --central-base "/Users/name/Desktop/WorkSpace" \
   --mode centralize
 ```
@@ -178,6 +198,16 @@ python3 skills/e8-skill-linker/scripts/skill_manager.py inspect --project .
 
 # Show the effective configuration
 python3 skills/e8-skill-linker/scripts/skill_manager.py config --project .
+
+# Show named libraries in user, project, and effective scopes
+python3 skills/e8-skill-linker/scripts/skill_manager.py library-list --project .
+
+# Explicitly migrate a v1 config to schema v2 (dry-run first)
+python3 skills/e8-skill-linker/scripts/skill_manager.py migrate-config --scope user --library personal
+
+# Add a named work library without replacing the existing configuration
+python3 skills/e8-skill-linker/scripts/skill_manager.py library-add \
+  --scope user --name work --central-base /Volumes/Work
 
 # Check broken links and structural problems
 python3 skills/e8-skill-linker/scripts/skill_manager.py check --project .
@@ -203,16 +233,67 @@ python3 skills/e8-skill-linker/scripts/skill_manager.py link-many \
   --project . \
   --sources ~/.e8-skill-linker/AgentSkills/a,~/.e8-skill-linker/AgentSkills/b
 
+# Preserve a complete third-party repository, expose its skills, and enable them here
+python3 skills/e8-skill-linker/scripts/skill_manager.py install-repo \
+  --project . \
+  --repo-url https://github.com/example/skills.git \
+  --skills writer=skills/writer,reviewer=.agents/skills/reviewer \
+  --enable-project
+
 # Disable a skill in the current project without deleting its source
 python3 skills/e8-skill-linker/scripts/skill_manager.py unlink \
   --target .agents/skills/write-blog
 
 # Check Git repositories in the central library for updates
-python3 skills/e8-skill-linker/scripts/skill_manager.py updates \
-  --central ~/.e8-skill-linker/AgentSkills
+python3 skills/e8-skill-linker/scripts/skill_manager.py updates --project .
 ```
 
 `link`, `link-many`, and `migrate` reject sources that are not configured or authorized. Do not point links directly at arbitrary download directories, desktop folders, repository roots, or temporary directories.
+
+## Named Libraries and Repository Updates
+
+Project links preserve a stable central entry on every platform, including Windows junctions:
+
+```text
+project/.agents/skills/writer
+  -> central/writer
+    -> central/.repos/github.com/owner/repository/skills/writer
+```
+
+Use `--library work` with `install-repo`, `link`, `link-many`, `check`, `updates`, or `update` to select a library for one command without changing `active_library`. Project configuration still completely overrides user configuration. Each library has independent repository copies and a registry. Switching the default library reports existing project link ownership and leaves those links in place.
+
+Run these commands from this repository; from another directory, use the absolute path to `skill_manager.py`. Mutating examples below assume you have reviewed and approved their scope.
+
+```bash
+# Install into work; reuse the same repository when adding another skill later
+python3 skills/e8-skill-linker/scripts/skill_manager.py install-repo \
+  --library work --repo-url https://github.com/example/skills.git \
+  --skills writer=skills/writer --execute
+
+# Enable an already installed skill in another project through its central entry
+python3 skills/e8-skill-linker/scripts/skill_manager.py link \
+  --project /path/to/project --library work \
+  --source /Volumes/Work/.e8-skill-linker/AgentSkills/writer --execute
+
+# Fetch update information for every library in the effective configuration
+python3 skills/e8-skill-linker/scripts/skill_manager.py updates --all-libraries --execute
+
+# Apply a reviewed repository update in work
+python3 skills/e8-skill-linker/scripts/skill_manager.py update --library work \
+  --repo /Volumes/Work/.e8-skill-linker/AgentSkills/.repos/github.com/example/skills --execute
+
+python3 skills/e8-skill-linker/scripts/skill_manager.py check --all-libraries
+```
+
+Updates use `.skill-linker-lock.json` as the repository inventory. They do not scan legacy repositories at the central root. A nonempty `.repos` without a registry is an error. The stored revision records the installed commit; it cannot tell you whether GitHub has newer commits without a fetch.
+
+`updates` labels each result `local-cache`, `fetched`, or `fetch-failed`. Only a successful fetch provides fresh remote information. Failed fetches and missing upstream branches are unknown states, not “up to date.” There is no background polling.
+
+`update` fetches once, checks that registered skills still exist with matching identities in the candidate commit, and applies that exact SHA using `git merge --ff-only`. It then validates central entries and records the new revision. Dirty worktrees, detached HEAD, missing upstream, divergence, removed skills, or changed identities stop the update. A rejected candidate leaves the worktree unchanged, although fetched Git metadata remains. If validation or registry writing fails after applying the commit, the command reports failure without automatically resetting the worktree.
+
+Reports distinguish repository changes, directly changed installed skills, added/deleted skill paths, and available unexposed skills. Shared resource changes may affect other skills too. New skills require explicit installation; run `install-repo` again to add them using the existing repository. Root skills use `name=.` and may have a different name from the repository.
+
+Existing project links that point directly into `.repos` are not silently rewritten. Inspect their immediate targets with `check`, then explicitly unlink and relink through the central entry. Replacement backups of the management skill are stored under `~/.e8-skill-linker/backups/e8-skill-linker/`, outside Agent discovery directories.
 
 ## Windows
 

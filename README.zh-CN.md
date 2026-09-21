@@ -27,7 +27,9 @@
 
 中央 skills 库和 Agent 全局目录不是同一个概念：
 
-- 中央库保存 skill 原件，默认推荐 `~/.e8-skill-linker/AgentSkills`。
+- 中央库根层保存可发现的 skill 原件或入口，默认推荐 `~/.e8-skill-linker/AgentSkills`。
+- 第三方 Git 仓库完整保存在 `<central>/.repos/<host>/<owner>/<repo>`，根层 skill 通过 symlink 或 junction 指向仓库内目录。
+- `<central>/.skill-linker-lock.json` 记录仓库来源、当前 commit、子路径与中央 skill 入口。
 - macOS/Linux 的 Agent 全局目录通常是 `~/.agents/skills`、`~/.codex/skills` 或 `~/.claude/skills`。
 - Windows 使用 `%USERPROFILE%\.e8-skill-linker\AgentSkills` 作为默认中央库。
 - 项目级 `.agents/skills`、`.codex/skills` 和 `.claude/skills` 是当前项目的入口。
@@ -98,7 +100,7 @@ npx skills remove e8-skill-linker --global --agent codex
 3. 如果没有配置，推荐非全局中央库：macOS/Linux 使用 `~/.e8-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.e8-skill-linker\AgentSkills`。
 4. 允许用户提供自定义父目录，并在该目录下派生 `.e8-skill-linker/AgentSkills`。
 5. 只读扫描项目级和用户级 skills，明确区分来源、目标和影响。
-6. 对配置、迁移、同步、链接、删除、克隆和 Git 更新先给出计划，用户确认后才执行。
+6. 对配置、仓库安装、迁移、同步、链接、删除和 Git 更新先生成一份完整计划，用户确认作用范围后执行。仓库安装失败会回滚本次新增内容；Git 更新在应用前验证候选提交。
 
 默认不会把 `~/.agents/skills`、`~/.codex/skills` 或 `~/.claude/skills` 当作中央库。如果用户选择这些全局目录，必须明确提醒它们可能让 skills 对所有项目可见，并要求确认。
 
@@ -120,13 +122,22 @@ Agent 全局目录通常会同时触发这两项提醒，因此只有用户分�
 当前项目/.skill-linker.json
 ```
 
-项目级配置优先于用户级配置。普通个人使用建议只配置一个用户级中央库；项目级配置用于团队共享、客户隔离或测试场景。
+项目级配置整体优先于用户级配置。schema v2 可登记多个命名中央库，但一份生效配置同时只选择一个 `active_library`。
 
 配置示例：
 
 ```json
 {
-  "central_skills_dir": "/Users/you/.e8-skill-linker/AgentSkills",
+  "schema_version": 2,
+  "libraries": {
+    "personal": {
+      "path": "/Users/you/.e8-skill-linker/AgentSkills"
+    },
+    "work": {
+      "path": "/Volumes/Work/.e8-skill-linker/AgentSkills"
+    }
+  },
+  "active_library": "personal",
   "default_mode": "centralize"
 }
 ```
@@ -135,7 +146,13 @@ Windows 示例：
 
 ```json
 {
-  "central_skills_dir": "C:\\Users\\you\\.e8-skill-linker\\AgentSkills",
+  "schema_version": 2,
+  "libraries": {
+    "personal": {
+      "path": "C:\\Users\\you\\.e8-skill-linker\\AgentSkills"
+    }
+  },
+  "active_library": "personal",
   "default_mode": "centralize"
 }
 ```
@@ -145,6 +162,7 @@ Windows 示例：
 ```bash
 python3 skills/e8-skill-linker/scripts/skill_manager.py config \
   --scope user \
+  --library personal \
   --central ~/.e8-skill-linker/AgentSkills \
   --mode centralize
 ```
@@ -154,6 +172,7 @@ python3 skills/e8-skill-linker/scripts/skill_manager.py config \
 ```bash
 python3 skills/e8-skill-linker/scripts/skill_manager.py config \
   --scope user \
+  --library personal \
   --central ~/.e8-skill-linker/AgentSkills \
   --mode centralize \
   --execute
@@ -164,6 +183,7 @@ python3 skills/e8-skill-linker/scripts/skill_manager.py config \
 ```bash
 python3 skills/e8-skill-linker/scripts/skill_manager.py config \
   --scope user \
+  --library personal \
   --central-base "/Users/name/Desktop/WorkSpace" \
   --mode centralize
 ```
@@ -178,6 +198,16 @@ python3 skills/e8-skill-linker/scripts/skill_manager.py inspect --project .
 
 # 查看当前生效配置
 python3 skills/e8-skill-linker/scripts/skill_manager.py config --project .
+
+# 查看所有命名库与生效作用域
+python3 skills/e8-skill-linker/scripts/skill_manager.py library-list --project .
+
+# 显式将 v1 配置升级为 v2（先 dry-run）
+python3 skills/e8-skill-linker/scripts/skill_manager.py migrate-config --scope user --library personal
+
+# 向用户配置增加 work 库（先 dry-run）
+python3 skills/e8-skill-linker/scripts/skill_manager.py library-add \
+  --scope user --name work --central-base /Volumes/Work
 
 # 检查失效链接和结构问题
 python3 skills/e8-skill-linker/scripts/skill_manager.py check --project .
@@ -203,16 +233,67 @@ python3 skills/e8-skill-linker/scripts/skill_manager.py link-many \
   --project . \
   --sources ~/.e8-skill-linker/AgentSkills/a,~/.e8-skill-linker/AgentSkills/b
 
+# 完整保留第三方仓库，创建中央入口，并在当前项目启用
+python3 skills/e8-skill-linker/scripts/skill_manager.py install-repo \
+  --project . \
+  --repo-url https://github.com/example/skills.git \
+  --skills writer=skills/writer,reviewer=.agents/skills/reviewer \
+  --enable-project
+
 # 从当前项目停用 skill，只删除入口链接
 python3 skills/e8-skill-linker/scripts/skill_manager.py unlink \
   --target .agents/skills/write-blog
 
 # 检查中央目录中的 Git 仓库更新
-python3 skills/e8-skill-linker/scripts/skill_manager.py updates \
-  --central ~/.e8-skill-linker/AgentSkills
+python3 skills/e8-skill-linker/scripts/skill_manager.py updates --project .
 ```
 
 `link`、`link-many` 和 `migrate` 会拒绝未配置或未授权的源路径。不要把下载目录、桌面目录、仓库根目录或临时目录直接作为软链接目标。
+
+## 多中央库与仓库更新
+
+项目链接在所有平台上保留中央入口这一层，Windows junction 也遵循相同结构：
+
+```text
+项目/.agents/skills/writer
+  → 中央库/writer
+    → 中央库/.repos/github.com/owner/repository/skills/writer
+```
+
+`install-repo`、`link`、`link-many`、`check`、`updates`、`update` 可使用 `--library work` 单次选库，不修改 `active_library`。项目级配置仍完整覆盖用户配置。每个库独立保存仓库与来源清单；切换默认库会显示当前项目链接的归属，但保留原链接。
+
+以下示例从本仓库执行；在其他目录使用时，请将脚本改为绝对路径。带 `--execute` 的示例以已审查并确认作用范围为前提。
+
+```bash
+# 安装到 work，以后增加同仓库的其他 skill 时复用该仓库
+python3 skills/e8-skill-linker/scripts/skill_manager.py install-repo \
+  --library work --repo-url https://github.com/example/skills.git \
+  --skills writer=skills/writer --execute
+
+# 在另一个项目通过中央入口启用已有 skill
+python3 skills/e8-skill-linker/scripts/skill_manager.py link \
+  --project /path/to/project --library work \
+  --source /Volumes/Work/.e8-skill-linker/AgentSkills/writer --execute
+
+# 联网检查生效配置中的全部中央库
+python3 skills/e8-skill-linker/scripts/skill_manager.py updates --all-libraries --execute
+
+# 应用已经审查的 work 库仓库更新
+python3 skills/e8-skill-linker/scripts/skill_manager.py update --library work \
+  --repo /Volumes/Work/.e8-skill-linker/AgentSkills/.repos/github.com/example/skills --execute
+
+python3 skills/e8-skill-linker/scripts/skill_manager.py check --all-libraries
+```
+
+更新检查以 `.skill-linker-lock.json` 为权威仓库清单，不再扫描中央库根层的旧式 Git 仓库。`.repos` 非空却缺少清单时直接报错。清单中的 revision 记录已安装提交，不能代替 fetch 检测 GitHub 更新。
+
+`updates` 输出区分 `local-cache`、`fetched` 和 `fetch-failed`。只有本次 fetch 成功才有新获取的远端状态；获取失败或没有 upstream 时是“未知”，不能报告成“已是最新”。目前没有后台自动检查。
+
+`update` 先 fetch，从 Git 对象中检查已登记 skill 的路径和身份，再通过 `git merge --ff-only <候选SHA>` 应用已验证提交，最后校验入口并写入 revision。有本地改动、detached HEAD、没有 upstream、分叉、skill 路径消失或名称变化时停止。候选版本被拒绝时工作区保持原样，但已获取的 Git 元数据保留。应用后的校验或清单写入若失败，报告实际状态，不自动 reset 工作区。
+
+报告区分仓库变更、直接修改的已安装 skills、新增/删除的 skill 路径及尚未暴露的 skills。共享资源变化也可能影响其他 skill。上游新增 skill 需要用户显式选择，再次运行 `install-repo` 即可复用仓库追加入口。根目录 skill 用 `name=.`，名称允许不同于仓库名。
+
+已有项目中直接指向 `.repos` 的旧链接不会自动重建。先通过 `check` 查看直接目标，再明确执行 unlink/link，使其经过中央入口。管理器自身替换安装时，备份固定保存到 `~/.e8-skill-linker/backups/e8-skill-linker/`，避免旧副本被 Agent 重复发现。
 
 ## Windows
 

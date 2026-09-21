@@ -1,181 +1,159 @@
-# 脚本命令
+# CLI 命令参考
 
-使用 `scripts/skill_manager.py` 进行确定性的检查和安全的软链接操作。除非传入 `--execute`，默认命令都是只读或 dry-run。
+使用 `scripts/skill_manager.py` 执行确定性操作。不带 `--execute` 的写入命令只输出计划。
 
-## 检查与配置
-
-检查当前状态：
+## 检查
 
 ```bash
 python3 scripts/skill_manager.py inspect --project .
-```
-
-查看当前生效配置：
-
-```bash
 python3 scripts/skill_manager.py config --project .
-```
-
-只检查链接：
-
-```bash
-python3 scripts/skill_manager.py check --project .
-```
-
-同时检查用户级 Agent 目录和已配置的中央库：
-
-```bash
+python3 scripts/skill_manager.py library-list --project .
 python3 scripts/skill_manager.py check --project . --include-user --include-central
+python3 scripts/skill_manager.py check --project . --library work
+python3 scripts/skill_manager.py check --project . --all-libraries
 ```
 
-以 dry-run 方式写入用户级中央目录配置。默认推荐使用 `e8-skill-linker` 专属的非全局目录，不要默认写成 `~/.agents/skills`：
+## 创建 schema v2 配置
+
+首次配置一个名为 `personal` 的用户级中央库：
 
 ```bash
-python3 scripts/skill_manager.py config --scope user --central ~/.e8-skill-linker/AgentSkills --mode centralize
+python3 scripts/skill_manager.py config \
+  --scope user \
+  --library personal \
+  --central ~/.e8-skill-linker/AgentSkills \
+  --mode centralize
 ```
 
-如果用户提供的是自定义父目录，使用 `--central-base`，脚本会自动派生 `<父目录>/.e8-skill-linker/AgentSkills`：
+用户确认后增加 `--execute`。用户提供自定义父目录时使用 `--central-base`，脚本会派生 `<parent>/.e8-skill-linker/AgentSkills`。
+
+`config` 会创建一份新配置；目标配置已存在时，计划会明确显示 `will_replace_config`。增加中央库应使用 `library-add`，不用 `config` 覆盖整份配置。
+
+## v1 配置迁移
 
 ```bash
-python3 scripts/skill_manager.py config --scope user --central-base "/Users/name/Desktop/WorkSpace" --mode centralize
+python3 scripts/skill_manager.py migrate-config \
+  --scope user \
+  --library personal
 ```
 
-用户确认后写入：
+确认输出中的原路径、schema 与风险后：
 
 ```bash
-python3 scripts/skill_manager.py config --scope user --central ~/.e8-skill-linker/AgentSkills --mode centralize --execute
+python3 scripts/skill_manager.py migrate-config \
+  --scope user \
+  --library personal \
+  --execute
 ```
 
-如果用户明确选择 Agent 全局 skills 目录作为中央库，执行时必须增加 `--allow-global-central`。如果用户明确把一个不含 `.e8-skill-linker/AgentSkills` 命名空间的路径作为最终中央目录，执行时必须增加 `--allow-non-namespaced-central`。这两个参数只表示用户已经理解并确认风险，不能由 Agent 擅自添加。
+迁移只更改配置文件，不移动中央库内容。
 
-## 自举安装
-
-以 dry-run 方式把 `e8-skill-linker` 自身安装到用户级全局目录，便于新项目自动召回：
+## 命名中央库
 
 ```bash
-python3 scripts/skill_manager.py install-self --source /path/to/e8-skill-linker --agents agents,codex,claude
+# 增加 work，但不切换
+python3 scripts/skill_manager.py library-add \
+  --scope user \
+  --name work \
+  --central-base /Volumes/Work
+
+# 增加后立即设为活动库
+python3 scripts/skill_manager.py library-add \
+  --scope user \
+  --name work \
+  --central-base /Volumes/Work \
+  --activate
+
+# 切换已登记的活动库
+python3 scripts/skill_manager.py library-use --scope user --name work
 ```
 
-用户确认后执行：
+确认后增加 `--execute`。`library-use` 只改变配置选择，不静默重写项目中的旧链接。
+
+`install-repo`、`link`、`link-many`、`check`、`updates` 和 `update` 可用 `--library work` 单次选库。`updates`、`check` 的 `--all-libraries` 处理当前生效配置内所有库，与 `--library` 互斥；不会合并用户级与项目级配置。
+
+选择 Agent 全局 skills 目录需要用户明确确认后增加 `--allow-global-central`。最终路径故意不包含 `.e8-skill-linker/AgentSkills` 时，需要确认后增加 `--allow-non-namespaced-central`。
+
+## 仓库安装
+
+先根据远程仓库结构确定 skill 规格，然后 dry-run：
 
 ```bash
-python3 scripts/skill_manager.py install-self --source /path/to/e8-skill-linker --agents agents,codex,claude --execute
+python3 scripts/skill_manager.py install-repo \
+  --project . \
+  --library personal \
+  --repo-url https://github.com/example/skills.git \
+  --skills writer=skills/writer,reviewer=.agents/skills/reviewer \
+  --enable-project
 ```
 
-如果全局副本已经存在，脚本默认停止。用户明确确认替换后增加 `--replace --execute`；旧副本会移动到同级的 `e8-skill-linker.backup-<UTC 时间>`，不会直接删除。
+根目录就是 skill 时使用 `--skills skill-name=.`。计划会列出 `.repos/<host>/<owner>/<repo>`、中央 skill 入口、可选项目入口和 `.skill-linker-lock.json`。用户确认后增加 `--execute`。
 
-## 初始化与链接
+`install-repo` 要求完整计划中的 skill 名称与路径都已知。它会原子化地克隆仓库、验证 `SKILL.md`、创建入口并写入来源清单；失败时回滚本次新建内容。
 
-以 dry-run 方式初始化项目入口目录：
+根目录 skill 的名称可以不同于仓库名。仓库已经登记时复用本地版本；再运行相同命令可追加 skill，或用 `--enable-project --project <另一个项目>` 启用已有 skill。新增失败保留已有仓库、入口与清单，不自动 fetch。
+
+`clone` 保留为低层命令，只克隆并发现 skills，不登记到中央库。
+
+## 项目入口
 
 ```bash
 python3 scripts/skill_manager.py init --project . --agents claude,codex
-```
-
-用户确认后执行：
-
-```bash
-python3 scripts/skill_manager.py init --project . --agents claude,codex --execute
-```
-
-以 dry-run 方式链接单个 skill：
-
-```bash
 python3 scripts/skill_manager.py link --project . --source ~/.e8-skill-linker/AgentSkills/write-blog
-```
-
-用户确认后执行：
-
-```bash
-python3 scripts/skill_manager.py link --project . --source ~/.e8-skill-linker/AgentSkills/write-blog --execute
-```
-
-以 dry-run 方式把多个 skills 链接到当前项目：
-
-```bash
-python3 scripts/skill_manager.py link-many --project . --sources ~/.e8-skill-linker/AgentSkills/a,~/.e8-skill-linker/AgentSkills/b
-```
-
-`link` 和 `link-many` 会拒绝不在当前生效中央库或当前项目 `.agents/skills` 内的源路径。
-
-`link-many` 会先验证所有源、目标名称和目标冲突；任何一项失败时，不创建任何链接。
-
-以 dry-run 方式从当前项目停用某个 skill。此命令只删除软链接或 junction，不删除中央原件：
-
-```bash
+python3 scripts/skill_manager.py link-many --project . --sources /central/a,/central/b
 python3 scripts/skill_manager.py unlink --target .agents/skills/write-blog
 ```
 
-用户确认后执行停用：
+开始写入前先运行 dry-run，用户确认后增加 `--execute`。`unlink` 只删除链接或 junction，不删除中央原件。
+
+## 迁移已有真实 skill
 
 ```bash
-python3 scripts/skill_manager.py unlink --target .agents/skills/write-blog --execute
+python3 scripts/skill_manager.py migrate \
+  --project . \
+  --source ~/.claude/skills/write-blog \
+  --central ~/.e8-skill-linker/AgentSkills
 ```
 
-## 迁移
+`--central` 必须与当前活动中央库一致。确认后增加 `--execute`。
 
-以 dry-run 方式把已有真实 skill 目录迁移到中央目录，并在原位置创建软链接：
+## Git 检查与更新
 
 ```bash
-python3 scripts/skill_manager.py migrate --source ~/.claude/skills/write-blog --central ~/GitHub/my-skills/skills
+python3 scripts/skill_manager.py git-status --repo /central/.repos/github.com/example/skills
+
+# 默认仅检查活动库的本地缓存
+python3 scripts/skill_manager.py updates --project .
+
+# 确认后获取指定库的最新远程状态
+python3 scripts/skill_manager.py updates --project . --library work --execute
+
+# 检查生效配置中的全部库
+python3 scripts/skill_manager.py updates --project . --all-libraries --execute
+
+# 确认后更新具体仓库
+python3 scripts/skill_manager.py update --library work --repo /central/.repos/github.com/example/skills --execute
+
+# 切换版本
+python3 scripts/skill_manager.py checkout --repo /central/.repos/github.com/example/skills --ref v1.2.0
 ```
 
-`migrate --central` 必须等于当前生效配置中的中央 skills 库；不要临时指定未配置目录。
+`updates` 不再接受任意 `--central` 路径，只处理选定库清单中的仓库。结果区分 `local-cache`、`fetched`、`fetch-failed`；失败或没有 upstream 时不能声称最新。
 
-## Git 与仓库
+`update` 先 fetch，验证候选提交的已登记 skill，再用 `git merge --ff-only <候选SHA>` 更新。更新后校验入口并同步 revision。有本地改动、detached HEAD、没有 upstream、不能快进、skill 路径消失或名称变化时停止。该命令没有 `--allow-dirty` 绕过选项。
 
-检查单个下载仓库的 git 状态：
-
-```bash
-python3 scripts/skill_manager.py git-status --repo ~/GitHub/my-skills
-```
-
-检查中央目录下哪些下载的 skill 仓库可能落后远端。默认只使用本地已有的远端跟踪信息，不联网：
-
-```bash
-python3 scripts/skill_manager.py updates --central ~/GitHub/my-skills/skills
-```
-
-用户确认后，获取最新远端信息再判断哪些仓库有更新：
-
-```bash
-python3 scripts/skill_manager.py updates --central ~/GitHub/my-skills/skills --execute
-```
-
-用户确认后，更新某个下载仓库：
-
-```bash
-python3 scripts/skill_manager.py update --repo ~/GitHub/my-skills --execute
-```
-
-`update` 要求当前分支有 upstream，并使用 `git pull --ff-only`。仓库有本地改动、处于 detached HEAD、没有 upstream 或无法 fast-forward 时停止，不自动覆盖或合并。
-
-以 dry-run 方式克隆 skill 仓库到中央仓库父目录：
-
-```bash
-python3 scripts/skill_manager.py clone --repo-url https://github.com/user/some-skills.git --dest-parent ~/GitHub
-```
-
-用户确认后执行克隆，并在克隆后识别仓库中包含哪些 skills：
-
-```bash
-python3 scripts/skill_manager.py clone --repo-url https://github.com/user/some-skills.git --dest-parent ~/GitHub --execute
-```
-
-以 dry-run 方式切换某个下载仓库到指定版本：
-
-```bash
-python3 scripts/skill_manager.py checkout --repo ~/GitHub/my-skills --ref v1.2.0
-```
-
-确认后增加 `--execute`。仓库有本地改动时默认停止；只有用户理解风险并明确确认后才可增加 `--allow-dirty`。
+`--library` 与 `--repo` 同用时验证仓库归属。新增的上游 skills 只列出，不自动启用；追加入口需要再次运行 `install-repo`。
 
 ## Windows
 
-Windows 上如果 symlink 权限不足，可以显式使用 junction：
+目录 symlink 权限不足时可明确使用 `--link-type junction`：
 
 ```powershell
-python scripts/skill_manager.py link --project . --source C:\Users\you\GitHub\my-skills\skills\write-blog --link-type junction
-python scripts/skill_manager.py init --project . --agents claude,codex --link-type junction
-python scripts/skill_manager.py migrate --source C:\Users\you\.claude\skills\write-blog --central C:\Users\you\GitHub\my-skills\skills --link-type junction
+python scripts/skill_manager.py install-repo `
+  --repo-url https://github.com/example/skills.git `
+  --skills writer=skills/writer `
+  --enable-project `
+  --link-type junction
 ```
+
+用户确认后增加 `--execute`。不让 Agent 静默提权或绕过 UAC。

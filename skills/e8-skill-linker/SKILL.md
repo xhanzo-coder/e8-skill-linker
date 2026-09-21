@@ -1,74 +1,55 @@
 ---
 name: e8-skill-linker
-description: 管理、安装、链接、迁移、同步和更新 Agent skills 的中央库与项目入口。用户说“安装一个 skill”“帮我整理 skills”“这个项目启用某个 skill”“同步 Codex/Claude/.agents skills”“把 skill 放到中央库”“检查 skill 更新”“删除/停用 skill”“为什么新项目读不到 skill”“把 e8-skill-linker 装到全局”“初始化 .agents/.codex/.claude/skills”“修复失效软链接”“切换 skill 版本”“fork/更新别人写的 skill”时使用。用于检查和配置 .skill-linker.json、推荐非全局中央库 ~/.e8-skill-linker/AgentSkills、区分 Agent 全局 skills 目录与项目级 skills 入口、把业务 skills 按项目软链接启用、以及在确认后将 e8-skill-linker 作为管理型 skill 安装到用户级全局目录以便新项目自动召回。
+description: 安全管理 Agent skills 的命名中央库、Git 仓库来源和项目级入口。当用户要安装 GitHub skill 或 skill pack、初始化或切换中央库、为项目启用/停用 skill、同步 Codex/Claude/.agents 入口、检查或更新仓库、迁移现有 skills、修复链接或管理 fork 时使用。区分中央原件库与 Agent 全局发现目录；业务 skills 默认只按项目启用。
 ---
 
 # E8 Skill Linker
 
-## 核心职责
+## 所有权边界
 
-使用这个 skill，把中央来源中的 Agent skills 安全链接到项目级 skills 目录中。默认只做只读检查；在任何写入、同步、替换、删除、克隆或 git 更新前，先解释计划并获得用户确认。
+将三层路径始终分开：
 
-如果已经存在 `.skill-linker.json` 配置，优先使用配置中的中央 skills 目录，不要在新对话里重新把当前项目目录猜成中央目录。
+- 中央库保存 skill 原件与可发现入口。第三方 Git 仓库完整保存在 `<central>/.repos/`，中央库根层只暴露包含 `SKILL.md` 的 skill 入口。
+- 项目级 `.agents/skills/<name>` 指向中央库根层 `<name>`，再由中央入口指向仓库内 skill；Windows junction 同样保留这一层。`.codex/skills` 和 `.claude/skills` 可指向项目 hub。
+- 用户级 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 是 Agent 全局发现目录，不是默认中央库。`e8-skill-linker` 作为管理型 skill 可例外安装到用户级。
 
-## 不可违反的规则
+## 默认交互
 
-- 除非用户明确要求某个安全的写入操作，否则先从只读检查开始。
-- 在把某个目录视为中央 skills 目录前，必须先让用户确认。
-- 不要默认把 `~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills` 当作中央库；这些是 Agent 全局发现目录。
-- 首次没有配置时，默认推荐非全局中央目录：macOS/Linux 使用 `~/.e8-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.e8-skill-linker\AgentSkills`。
-- 用户提供自定义父目录时，实际中央库必须派生为 `<父目录>/.e8-skill-linker/AgentSkills`，不要把 skill 原件直接散放在父目录下。
-- 创建软链接时，链接目标只能指向已配置的中央 skills 库，或当前项目的项目级 skills 入口目录。不要把任意下载目录、临时目录、桌面目录、仓库根目录或其他未授权路径直接作为软链接目标。
-- 在同步或迁移前，列出所有计划创建、替换、跳过、备份、删除或 git 操作，并等待用户确认。
-- 不要用软链接覆盖已有的真实目录。
-- 用户说“删除 skill”时，默认理解为“从当前项目停用”，只删除入口链接；不要删除真实 skill 目录，除非用户明确要求删除那个具体目录。
-- 通过软链接编辑文件前要提醒用户：这会修改中央原件，并影响所有指向它的项目。
-- 在 Windows 上创建 symlink 可能需要 Developer Mode 或管理员终端；不要让 Agent 静默提权、绕过 UAC 或输入管理员密码。
+1. 识别请求是检查、配置、仓库安装、项目启用、停用、迁移、更新、checkout 还是 fork。
+2. 状态未知时先只读检查：读取项目级与用户级 `.skill-linker.json`，确定当前生效的命名中央库。
+3. 只读查询立即执行。一个写入目标形成一份完整计划，列出配置、仓库、中央入口、项目入口、更新、备份与删除影响。
+4. 获得一次作用域明确的确认后，再使用 `--execute` 执行该计划。遇到计划外冲突就停止，不静默改用其他路径或策略。
+5. 执行后自动检查配置、仓库清单、`SKILL.md` 和链接目标，然后汇报结果。
 
-## 任务路由
+## 中央库配置
 
-根据用户请求读取对应 reference。只加载当前任务需要的文件。
+schema v2 允许在一份配置中登记多个命名中央库，但每个项目只有一个 `active_library`。项目级配置整体优先于用户级配置，不合并两者。v1 配置必须经过 `migrate-config` 显式升级；不做静默兼容。
 
-- 自举安装、首次配置、中央库选择、`.skill-linker.json`、全局目录风险：读取 [references/bootstrap-and-central-library.md](references/bootstrap-and-central-library.md)。
-- 初始化项目入口、链接、批量链接、迁移、同步、删除或停用 skill：读取 [references/link-sync-and-removal.md](references/link-sync-and-removal.md)。
-- 检查结果、整理方案、确认口令、用户级/项目级路径表达：读取 [references/output-and-confirmation.md](references/output-and-confirmation.md)。
-- 下载/克隆 skills 仓库、检查更新、更新仓库、checkout、fork 建议：读取 [references/git-update-and-fork.md](references/git-update-and-fork.md)。
-- Windows symlink、junction、权限和跨盘注意事项：读取 [references/windows-links.md](references/windows-links.md)。
-- 需要确定命令参数或 dry-run/execute 示例时：读取 [references/script-commands.md](references/script-commands.md)。
+安装、链接、检查和更新可用 `--library <name>` 单次选库，不改变默认库。`updates` 和 `check` 支持 `--all-libraries`，范围为当前生效配置。切换默认库不迁移项目链接，报告已有链接的实际库归属。
 
-## 基本流程
+没有配置时，推荐非全局中央库：macOS/Linux 使用 `~/.e8-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.e8-skill-linker\AgentSkills`。自定义父目录必须派生为 `<parent>/.e8-skill-linker/AgentSkills`。
 
-1. 判断用户请求属于检查、初始化、下载/克隆、链接、批量链接、取消链接/停用、同步、迁移、更新、切换版本、fork 建议或解释。
-2. 状态未知时先执行只读检查，并读取当前项目 `.skill-linker.json` 与用户级 `~/.skill-linker.json`。
-3. 同时区分项目级目录和用户级目录：
-   - 项目级：`.agents/skills`、`.codex/skills`、`.claude/skills`
-   - 用户级：`~/.agents/skills`、`~/.codex/skills`、`~/.claude/skills`
-4. 如果配置中已有中央目录，围绕该中央目录给出建议方案；如果没有配置，按首次配置流程推荐非全局中央目录。
-5. 写入、迁移、同步、删除、克隆、fetch、pull、checkout 前，先给用户可审查的计划和明确确认口令。
-6. 用户确认后才执行；执行完成后再运行检查命令验证结果。
+## 不可违反的安全规则
 
-## 自举提醒
+- 不用链接覆盖真实目录或指向其他目标的链接。
+- 仓库安装前验证用户指定的 `name=relative/path`、`SKILL.md` frontmatter 和名称冲突；安装失败时回滚本次新建的仓库与入口。
+- 用户说“删除 skill”时默认只从当前项目停用；除非明确要求，不删除中央原件或 Git 仓库。
+- 更新检查以 `.skill-linker-lock.json` 为仓库清单；只有本次 fetch 成功才报告远端状态，缓存或失败不能称为“最新”。
+- Git 更新先 fetch，验证候选提交中的已登记 skill，再用 `merge --ff-only <已验证提交>` 更新并校验入口、记录 revision。有本地改动、detached HEAD、没有 upstream、无法 fast-forward 或候选 skill 失效时停止。
+- 通过链接编辑会修改中央原件并影响所有引用项目，操作前要提醒用户。
+- Windows 上可用 junction；不静默提权、绕过 UAC 或输入管理员密码。
 
-每次触发后，先判断 `e8-skill-linker` 自己是否已经安装在用户级全局 Agent skills 目录中，例如 `~/.agents/skills/e8-skill-linker`。如果当前加载的是项目级副本或非全局中央库副本，先说明它是管理型 skill，建议作为例外安装到用户级全局目录，以便新项目和新对话能自动召回它。业务型 skills 仍然不默认全局安装。
+## 按需路由
 
-不要自动迁移或安装。给出计划并等待用户确认。推荐确认口令：
+- 自举、schema v2、命名库和首次配置：[references/bootstrap-and-central-library.md](references/bootstrap-and-central-library.md)
+- 第三方仓库安装、`.repos`、来源清单、更新、checkout 和 fork：[references/repository-store-and-git.md](references/repository-store-and-git.md)
+- 项目入口、批量链接、迁移和停用：[references/link-sync-and-removal.md](references/link-sync-and-removal.md)
+- 检查结果、计划表和确认口令：[references/output-and-confirmation.md](references/output-and-confirmation.md)
+- Windows 链接权限与跨盘：[references/windows-links.md](references/windows-links.md)
+- CLI 参数与 dry-run/execute 示例：[references/script-commands.md](references/script-commands.md)
 
-```text
-确认全局安装 e8-skill-linker
-```
+## 管理器自身
 
-详细流程见 [references/bootstrap-and-central-library.md](references/bootstrap-and-central-library.md)。
+每次触发后检查 `e8-skill-linker` 是否已安装在用户级 Agent skills 目录。未安装时，说明它是管理型 skill 的全局例外，给出计划并等待 `确认全局安装 e8-skill-linker`；不自动迁移。
 
-## 脚本入口
-
-使用 `scripts/skill_manager.py` 进行确定性的检查和安全的软链接操作。除非传入 `--execute`，默认命令都是只读或 dry-run。
-
-常用入口：
-
-```bash
-python3 scripts/skill_manager.py inspect --project .
-python3 scripts/skill_manager.py config --project .
-python3 scripts/skill_manager.py check --project .
-```
-
-更多命令示例见 [references/script-commands.md](references/script-commands.md)。
+确定性操作使用 `scripts/skill_manager.py`。除非传入 `--execute`，所有写入命令均为 dry-run。

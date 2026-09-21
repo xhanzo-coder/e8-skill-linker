@@ -31,7 +31,27 @@ def write_skill(path: Path, name: str | None = None) -> None:
     )
 
 
-def write_config(path: Path, central: Path, mode: str = "centralize") -> None:
+def write_config(
+    path: Path,
+    central: Path,
+    mode: str = "centralize",
+    library: str = "personal",
+) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "libraries": {library: {"path": str(central)}},
+                "active_library": library,
+                "default_mode": mode,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_v1_config(path: Path, central: Path, mode: str = "centralize") -> None:
     path.write_text(
         json.dumps(
             {"central_skills_dir": str(central), "default_mode": mode},
@@ -76,6 +96,7 @@ class SkillManagerTests(unittest.TestCase):
 
         self.assertEqual(config["source"], "project")
         self.assertEqual(config["central_skills_dir"], str(project_central))
+        self.assertEqual(config["active_library"], "personal")
         self.assertEqual(config["default_mode"], "ask")
 
     def test_config_rejects_missing_and_unknown_fields(self) -> None:
@@ -85,7 +106,7 @@ class SkillManagerTests(unittest.TestCase):
             skill_manager.normalize_config(
                 config_path,
                 "project",
-                {"central_skills_dir": str(self.central)},
+                {"schema_version": 2},
                 self.home,
             )
         with self.assertRaisesRegex(ValueError, "未知字段"):
@@ -93,12 +114,80 @@ class SkillManagerTests(unittest.TestCase):
                 config_path,
                 "project",
                 {
-                    "central_skills_dir": str(self.central),
+                    "schema_version": 2,
+                    "libraries": {"personal": {"path": str(self.central)}},
+                    "active_library": "personal",
                     "default_mode": "centralize",
                     "extra": True,
                 },
                 self.home,
             )
+
+    def test_v1_config_requires_explicit_migration(self) -> None:
+        config_path = self.home / ".skill-linker.json"
+        write_v1_config(config_path, self.central)
+
+        config = skill_manager.load_effective_config(self.project, self.home)
+
+        self.assertEqual(config["source"], "error")
+        self.assertIn("migrate-config", config["error"])
+
+    def test_migrate_config_converts_v1_to_named_library(self) -> None:
+        config_path = self.home / ".skill-linker.json"
+        write_v1_config(config_path, self.central)
+        args = argparse.Namespace(
+            project=str(self.project),
+            home=str(self.home),
+            scope="user",
+            library="personal",
+            allow_global_central=False,
+            allow_non_namespaced_central=False,
+            execute=True,
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = skill_manager.migrate_config(args)
+
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(result, 0)
+        self.assertEqual(saved["schema_version"], 2)
+        self.assertEqual(saved["active_library"], "personal")
+        self.assertEqual(saved["libraries"]["personal"]["path"], str(self.central))
+
+    def test_library_add_and_use_manage_one_active_library(self) -> None:
+        config_path = self.home / ".skill-linker.json"
+        write_config(config_path, self.central)
+        work_base = self.root / "work"
+        work_central = work_base / ".e8-skill-linker" / "AgentSkills"
+        add_args = argparse.Namespace(
+            project=str(self.project),
+            home=str(self.home),
+            scope="user",
+            name="work",
+            central=None,
+            central_base=str(work_base),
+            activate=False,
+            allow_global_central=False,
+            allow_non_namespaced_central=False,
+            execute=True,
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(skill_manager.library_add(add_args), 0)
+
+        use_args = argparse.Namespace(
+            project=str(self.project),
+            home=str(self.home),
+            scope="user",
+            name="work",
+            execute=True,
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(skill_manager.library_use(use_args), 0)
+
+        config = skill_manager.load_effective_config(self.project, self.home)
+        self.assertEqual(config["active_library"], "work")
+        self.assertEqual(config["central_skills_dir"], str(work_central))
+        self.assertEqual(set(config["libraries"]), {"personal", "work"})
 
     def test_custom_base_derives_namespaced_central_directory(self) -> None:
         custom_base = self.root / "external-drive"
@@ -107,6 +196,7 @@ class SkillManagerTests(unittest.TestCase):
             home=str(self.home),
             central=None,
             central_base=str(custom_base),
+            library="personal",
             scope="user",
             mode="centralize",
             allow_global_central=False,
@@ -121,7 +211,9 @@ class SkillManagerTests(unittest.TestCase):
         expected = custom_base / ".e8-skill-linker" / "AgentSkills"
         self.assertTrue(expected.is_dir())
         saved = json.loads((self.home / ".skill-linker.json").read_text(encoding="utf-8"))
-        self.assertEqual(saved["central_skills_dir"], str(expected))
+        self.assertEqual(saved["schema_version"], 2)
+        self.assertEqual(saved["libraries"]["personal"]["path"], str(expected))
+        self.assertEqual(saved["active_library"], "personal")
 
     def test_config_dry_run_does_not_write(self) -> None:
         args = argparse.Namespace(
@@ -129,6 +221,7 @@ class SkillManagerTests(unittest.TestCase):
             home=str(self.home),
             central=str(self.central),
             central_base=None,
+            library="personal",
             scope="user",
             mode="centralize",
             allow_global_central=False,
@@ -150,6 +243,7 @@ class SkillManagerTests(unittest.TestCase):
             project=str(self.project),
             home=str(self.home),
             source=str(outside),
+            library=None,
             name=None,
             link_type="auto",
             execute=False,
@@ -165,6 +259,7 @@ class SkillManagerTests(unittest.TestCase):
             home=str(self.home),
             central=str(global_central),
             central_base=None,
+            library="personal",
             scope="user",
             mode="centralize",
             allow_global_central=False,
@@ -187,6 +282,7 @@ class SkillManagerTests(unittest.TestCase):
             home=str(self.home),
             central=str(custom_central),
             central_base=None,
+            library="personal",
             scope="user",
             mode="centralize",
             allow_global_central=False,
@@ -212,6 +308,7 @@ class SkillManagerTests(unittest.TestCase):
             project=str(self.project),
             home=str(self.home),
             sources=f"{valid},{invalid}",
+            library=None,
             link_type="auto",
             execute=True,
         )
@@ -262,6 +359,7 @@ class SkillManagerTests(unittest.TestCase):
         source = self.central / "writer"
         write_skill(source)
         link_args = argparse.Namespace(
+            library=None,
             project=str(self.project),
             home=str(self.home),
             source=str(source),
@@ -340,6 +438,8 @@ class SkillManagerTests(unittest.TestCase):
             home=str(self.home),
             include_user=False,
             include_central=False,
+            library=None,
+            all_libraries=False,
         )
         output = io.StringIO()
 
@@ -363,6 +463,8 @@ class SkillManagerTests(unittest.TestCase):
             home=str(self.home),
             include_user=False,
             include_central=False,
+            library=None,
+            all_libraries=False,
         )
         output = io.StringIO()
 
@@ -389,6 +491,9 @@ class SkillManagerTests(unittest.TestCase):
     def test_install_self_replace_keeps_backup(self) -> None:
         source = self.root / "source" / "e8-skill-linker"
         write_skill(source, "e8-skill-linker")
+        cache = source / "scripts" / "__pycache__"
+        cache.mkdir(parents=True)
+        (cache / "generated.pyc").write_bytes(b"generated")
         existing = self.home / ".agents" / "skills" / "e8-skill-linker"
         write_skill(existing, "old-copy")
         (existing / "marker.txt").write_text("old", encoding="utf-8")
@@ -405,11 +510,13 @@ class SkillManagerTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             result = skill_manager.install_self(args)
 
-        backups = list(existing.parent.glob("e8-skill-linker.backup-*"))
+        backups = list((self.home / ".e8-skill-linker" / "backups" / "e8-skill-linker").iterdir())
+        self.assertEqual(list(existing.parent.glob("e8-skill-linker.backup-*")), [])
         self.assertEqual(result, 0)
         self.assertEqual(len(backups), 1)
         self.assertEqual((backups[0] / "marker.txt").read_text(encoding="utf-8"), "old")
         self.assertEqual((existing / "SKILL.md").read_text(encoding="utf-8"), (source / "SKILL.md").read_text(encoding="utf-8"))
+        self.assertFalse((existing / "scripts" / "__pycache__").exists())
 
     def test_install_self_rolls_back_when_agent_link_fails(self) -> None:
         source = self.root / "source" / "e8-skill-linker"
@@ -463,7 +570,7 @@ class SkillManagerTests(unittest.TestCase):
         (updater / "README.md").write_text("updated upstream\n", encoding="utf-8")
         subprocess.run(["git", "commit", "-am", "upstream update"], cwd=updater, check=True, capture_output=True, text=True)
         subprocess.run(["git", "push"], cwd=updater, check=True, capture_output=True, text=True)
-        args = argparse.Namespace(repo=str(repo), allow_dirty=False, execute=True)
+        args = argparse.Namespace(repo=str(repo), library=None, execute=True)
 
         with contextlib.redirect_stdout(io.StringIO()):
             result = skill_manager.update_repo(args)
@@ -522,6 +629,89 @@ class SkillManagerTests(unittest.TestCase):
         repos = skill_manager.find_git_repos(central)
 
         self.assertEqual(repos, [])
+
+    def test_nonempty_store_requires_registry(self) -> None:
+        repo = self.central / ".repos" / "github.com" / "example" / "skills"
+        repo.parent.mkdir(parents=True)
+        init_git_repo(repo)
+
+        with self.assertRaisesRegex(SystemExit, "缺少来源清单"):
+            skill_manager.find_git_repos(self.central)
+
+    def test_install_repo_keeps_full_repo_and_creates_skill_entries(self) -> None:
+        source = self.root / "source-repo"
+        init_git_repo(source)
+        write_skill(source / "skills" / "demo")
+        subprocess.run(["git", "add", "skills/demo/SKILL.md"], cwd=source, check=True)
+        subprocess.run(["git", "commit", "-m", "add demo"], cwd=source, check=True, capture_output=True, text=True)
+        skill_revision = skill_manager.git_output(source, ["rev-parse", "HEAD"])
+        (source / "README.md").write_text("second\n", encoding="utf-8")
+        subprocess.run(["git", "commit", "-am", "second"], cwd=source, check=True, capture_output=True, text=True)
+        latest_revision = skill_manager.git_output(source, ["rev-parse", "HEAD"])
+        write_config(self.home / ".skill-linker.json", self.central)
+        args = argparse.Namespace(
+            project=str(self.project),
+            home=str(self.home),
+            repo_url=str(source),
+            skills="demo=skills/demo",
+            library=None,
+            enable_project=True,
+            link_type="junction" if os.name == "nt" else "symlink",
+            execute=True,
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = skill_manager.install_repo(args)
+
+        central_entry = self.central / "demo"
+        project_entry = self.project / ".agents" / "skills" / "demo"
+        registry = skill_manager.read_registry(self.central)
+        self.assertEqual(result, 0)
+        self.assertTrue((central_entry / "SKILL.md").is_file())
+        self.assertTrue((project_entry / "SKILL.md").is_file())
+        self.assertEqual(len(registry["repositories"]), 1)
+        record = next(iter(registry["repositories"].values()))
+        self.assertEqual(record["skills"]["demo"]["subpath"], "skills/demo")
+        self.assertEqual(record["revision"], latest_revision)
+
+        installed_repo = self.central / record["path"]
+        checkout_args = argparse.Namespace(
+            repo=str(installed_repo),
+            ref=skill_revision,
+            allow_dirty=False,
+            execute=True,
+        )
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(skill_manager.checkout(checkout_args), 0)
+        updated_registry = skill_manager.read_registry(self.central)
+        updated_record = next(iter(updated_registry["repositories"].values()))
+        self.assertEqual(updated_record["revision"], skill_revision)
+
+    def test_install_repo_rolls_back_when_skill_identity_mismatches(self) -> None:
+        source = self.root / "bad-source-repo"
+        init_git_repo(source)
+        write_skill(source / "skills" / "demo", "other")
+        subprocess.run(["git", "add", "skills/demo/SKILL.md"], cwd=source, check=True)
+        subprocess.run(["git", "commit", "-m", "add bad demo"], cwd=source, check=True, capture_output=True, text=True)
+        write_config(self.home / ".skill-linker.json", self.central)
+        args = argparse.Namespace(
+            project=str(self.project),
+            home=str(self.home),
+            repo_url=str(source),
+            skills="demo=skills/demo",
+            library=None,
+            enable_project=False,
+            link_type="junction" if os.name == "nt" else "symlink",
+            execute=True,
+        )
+
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(SystemExit, "不一致"):
+            skill_manager.install_repo(args)
+
+        self.assertFalse((self.central / "demo").exists())
+        self.assertEqual(skill_manager.read_registry(self.central)["repositories"], {})
+        repository_dirs = [path for path in (self.central / ".repos").rglob(".git")]
+        self.assertEqual(repository_dirs, [])
 
     def test_rejects_path_traversal_names_and_option_like_git_refs(self) -> None:
         with self.assertRaisesRegex(SystemExit, "路径穿越"):
