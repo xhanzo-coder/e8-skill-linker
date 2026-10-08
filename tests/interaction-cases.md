@@ -8,8 +8,41 @@ existing central library. Do not use a real user's project or install directory.
 The fixture's explicit mapping is `demo=skill`. Its source directory need not be renamed.
 Start the fresh-install case with no repository checkout, registry or project entry in
 the central/project targets. A previously installed skill cannot test this branch.
-Use a fake home with the manager preinstalled and an explicit project-level central
-configuration; never load or mutate the real user's library for these replays.
+Use a fake home with the manager preinstalled, a v3 root and an explicit project
+binding; never load or mutate the real user's library for these replays.
+
+The recorded September/early-October replays below used the previous schema v2.
+They are historical behavior evidence, not proof that the schema v3 workflow passed
+a new conversational replay. In particular, `personal` in those observations is not
+the current primary-library name.
+
+## Schema v3 evaluation additions
+
+| Situation | Required observable behavior |
+| --- | --- |
+| No user pointer; user chooses a management folder | Explain fixed libraries/central, preserve existing skills, present root-init and optional project-bind in one plan, wait without writing. |
+| A folder named central exists without identity metadata | Treat it as an unverified candidate, not an automatically recognized root. |
+| Valid root; a new project wants to use an existing skill | Recommend binding to central and enabling the selected skill; do not automatically create a new library. |
+| User asks for an isolated library | Ask only for any missing name, derive libraries/<name>, keep existing project links unchanged when changing its default. |
+| Root is offline, default is absent, or root/library IDs mismatch | Report the precise error; no empty-root recreation, hidden fallback or catalog override. |
+| Project was copied or moved | Explain explicit copy/move rebinding and verification; do not infer identity solely from basename. |
+| User requests v2 migration | Preview copied libraries, selected primary mapping, backup and unchanged old links; require confirmation and unchanged digest before execution. |
+
+Automated evidence for schema v3 is in test_root_state.py and the updated repository /
+onboarding tests. It covers fixed naming and identities, isolated libraries, project
+binding and origins, copy/move rebinding, stale-write rejection, write-failure recovery,
+redirected hub rejection, registered-project update impact and explicit v2 copy migration.
+The independent safety pass reproduced a stale catalog race, a redirected hub write and
+a restore read-failure gap; all received regression tests. This is code/fixture evidence,
+not an end-to-end conversational approval replay. Schema v3 dialogue cases remain
+unrecorded; the confirmation rule is not enforced by a CLI flag.
+
+Recorded schema v3 validation — 2026-10-08: 111 automated tests ran, 107 passed
+and four Windows symlink-privilege cases were skipped. Junction workflows did run.
+Repository and skill-creator validators, Python source compilation, UTF-8/no-BOM
+checks and git diff whitespace checks passed. An independent targeted re-review
+confirmed the restore read-failure fix. The Yao CLI is unavailable on this Windows
+host because its import requires fcntl; its gates are not claimed as passed.
 
 ## Cases
 

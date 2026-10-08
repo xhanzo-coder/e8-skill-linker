@@ -1,72 +1,98 @@
-# 自举安装与命名中央库
+# 管理根、中央主库与项目绑定
 
 ## 管理器自举
 
-首次使用先按[首次使用与接管](first-use-and-adoption.md)只读盘点，同时判断 `e8-skill-linker` 是否已安装在用户级 Agent skills 目录，例如 `~/.agents/skills/e8-skill-linker`。已安装时继续用户的当前任务，不重复提醒。未安装不阻止盘点，扫描完成后再推荐用户级安装。
+先按[首次使用与接管](first-use-and-adoption.md)只读盘点。推荐将管理型 e8-skill-linker 安装到用户级 Agent skills 目录；缺失不阻塞盘点，已有副本复用。替换须单独列入确认计划，先备份到 ~/.e8-skill-linker/backups/e8-skill-linker/<UTC时间戳>，不得把备份留在 Agent 发现目录。业务 skills 默认按项目启用。
 
-未安装时，说明它是管理型 skill，可作为全局例外安装，便于新项目和新对话自动召回。业务 skills 仍默认保存在非全局中央库并按项目启用。展示计划并等待：
+## 固定布局：一个根，多库，多项目引用
+
+用户选择的是**管理根目录本身**，例如 E:/SkillsHub，不再追加隐藏命名空间。无偏好时建议 ~/.e8-skill-linker/SkillsHub（Windows 为 %USERPROFILE%/.e8-skill-linker/SkillsHub），该建议不是静默创建或回退路径。
 
 ```text
-确认全局安装 e8-skill-linker
+<root>/
+├── .skill-linker-registry.json
+└── libraries/
+    ├── central/                     # 固定中央主库，保留名称
+    │   ├── .skill-linker-library.json
+    │   ├── .skill-linker-lock.json   # 安装 Git 来源后生成
+    │   ├── .repos/github.com/owner/repo/
+    │   └── writer -> .repos/.../skills/writer
+    └── <用户自定库名>/                # 可选，同样结构
 ```
 
-全局目标已存在时默认停止。用户明确确认替换后，先将旧副本移到 `~/.e8-skill-linker/backups/e8-skill-linker/<UTC时间戳>`，再安装新副本。备份必须在 Agent 全局发现目录之外，避免旧副本被重复加载。
+central 是固定主库标识，展示为“中央主库”；不是 personal 或 work。其他库名由用户决定，使用 1–64 位小写字母、数字、连字符分隔片段，排除 Windows 设备名。示例名称不是预创建的默认库。
 
-## schema v2
+新项目通常复用 central，不为每个项目新建物理库。确实需要版本或内容隔离时才创建独立库，同一仓库在不同库内是独立 checkout。项目可从多个库启用不同名称的 skills；同名入口只能引用其中一个。多个项目可共享同一库。
 
-用户级配置默认位于 `~/.skill-linker.json`。项目级 `<project>/.skill-linker.json` 用于完整覆盖用户默认，适合团队共享、客户隔离或测试项目。两个配置不合并。
+## schema v3：三份配置各司其职
+
+用户 ~/.skill-linker.json 仅保存根指针：
+
+```json
+{"schema_version":3,"root":"/absolute/SkillsHub","root_id":"<UUID>"}
+```
+
+管理根 .skill-linker-registry.json 是唯一库目录与已登记项目索引：
 
 ```json
 {
-  "schema_version": 2,
-  "libraries": {
-    "personal": {
-      "path": "/Users/name/.e8-skill-linker/AgentSkills"
-    },
-    "work": {
-      "path": "/Volumes/Work/.e8-skill-linker/AgentSkills"
-    }
-  },
-  "active_library": "personal",
-  "default_mode": "centralize"
+  "schema_version":3,
+  "root_id":"<UUID>",
+  "libraries":{"central":{"path":"libraries/central","library_id":"<UUID>"}},
+  "projects":{"<项目UUID>":{"path":"/absolute/project"}}
 }
 ```
 
-规则：
+每个库的 .skill-linker-library.json 保存 schema_version、root_id、name、library_id，必须与登记表完全一致。UUID 由命令生成，示例占位符不可直接写入配置。
 
-- `libraries` 可登记多个命名中央库；名称只能使用小写字母、数字和连字符。
-- `active_library` 必须精确指向 `libraries` 中的一项。一个生效配置同时只有一个活动中央库。
-- 项目级配置整体优先于用户级配置；不根据名称或路径暗中合并。
-- `default_mode` 只能是 `centralize`、`project-local` 或 `ask`。
-- 必需字段缺失、未知字段、重复路径或无效活动库都直接报错。
+项目 <project>/.skill-linker.json 只保存绑定和启用来源，不另造或覆盖库清单：
 
-## v1 迁移
+```json
+{
+  "schema_version":3,
+  "root_id":"<UUID>",
+  "project_id":"<项目UUID>",
+  "default_library":"central",
+  "enabled":{"writer":"central"}
+}
+```
 
-如果发现仅包含 `central_skills_dir` 和 `default_mode` 的 v1 配置，不继续执行写入操作，也不静默兼容。先运行 `migrate-config` dry-run，展示将使用的库名称、原路径、配置作用域和风险提醒。用户确认后才增加 `--execute`。
+enabled 跟踪经管理器登记的项目 .agents/skills/<name>。原有真实目录、旧链接、直接安装在 .codex/.claude 的独立入口不因绑定项目而自动接管；检查时如实标记未登记。该文件含机器本地身份，不是可直接跨机器复用的团队依赖清单。
 
-迁移只重写配置 schema，不移动中央库内容，也不把现有根层 Git 仓库自动移入 `.repos`。仓库布局整理应作为另一份可审查计划。
+## 如何检测：验证身份，不猜目录名
 
-## 首次配置
+1. 读取用户指针，验证 schema、绝对路径、root_id。
+2. 读取根登记表，验证 root_id 一致、固定 central 存在、库名与 libraries/<name> 路径一致。
+3. 验证每个库目录和身份标记；拒绝链接父路径、越界、重复身份或未知字段。
+4. 读取实际 cwd 的项目绑定，核对 root_id、project_id、登记绝对路径、默认库和 enabled 来源。
+5. 检查真实项目链接的直接目标、中央入口及 SKILL.md 身份；配置声明不等于安装成功。
 
-1. 只读检查项目级与用户级配置。
-2. 没有配置时，推荐库名 `personal` 和非全局路径：
-   - macOS/Linux：`~/.e8-skill-linker/AgentSkills`
-   - Windows：`%USERPROFILE%\.e8-skill-linker\AgentSkills`
-3. 用户提供自定义父目录时，派生为 `<parent>/.e8-skill-linker/AgentSkills`；不把原件散放在父目录。
-4. 列出配置路径、库名、中央库路径、将创建的目录及影响范围。
-5. 获得用户确认后写入配置，再运行只读检查验证。创建库不迁移旧 skills；仅初始化也是完整有效的选择。管理器自举和库配置可合并成一份明确计划。
+没有用户指针：只读盘点，询问创建新根或连接已存在的 v3 根；不凭 SkillsHub/central 文件夹名自动接管。root-connect 先显示根身份，确认后携带 --expected-root-id 执行。
 
-## 命名库操作
+没有项目绑定：推荐绑定 central，列入计划确认后执行 project-bind；不会自动创建独立库，也不自动启用全部 skills。中央收藏操作不强制绑定项目，项目启用必须先绑定。
 
-- `library-list` 只读显示用户级、项目级和当前生效配置。
-- `library-add` 在指定作用域增加一个新库；同名或同路径时停止。
-- `library-use` 切换指定配置的活动库，输出当前项目已有链接的直接目标和库归属，不重写这些链接。如果需要迁移项目，另列链接差异与冲突。
-- `install-repo`、`link`、`link-many`、`check`、`updates`、`update` 接受 `--library <name>`。该选择仅用于本次操作，不修改 `active_library`。`update` 的 `--repo` 必须属于指定库的来源清单。
-- `check --all-libraries` 和 `updates --all-libraries` 处理当前生效配置中全部库。存在项目级配置时不会额外合并用户级库。
-- 每个库独立保存仓库和来源清单；同名 skill 可存在于不同库，项目 hub 中的同名入口仍只能指向一个库。
+已配置但根离线、库缺失、身份不符、默认库不存在、项目路径变化：明确报错；不自动新建空库、不回退到 central、不搜另一个同名目录。整个根目录迁移/切换现有用户指针不在自动修复范围，需要单独审查。
 
-## 高风险中央路径
+## 命令语义
 
-`~/.agents/skills`、`~/.codex/skills` 或 `~/.claude/skills` 会让内容对大量项目全局可见。用户主动选择时，先说明风险并等待明确确认；执行层使用 `--allow-global-central`。
+- root-init --root <目录>：仅接受不存在或空目录；创建 central、身份标记、根登记表和用户指针，不搬旧 skills，不绑定项目。已有用户配置不覆盖。
+- root-connect --root <目录>：连接合法 v3 根；不能覆盖指向其他状态的用户指针。
+- config / library-list：只读，显示同一根下的完整库清单、项目绑定和默认库。
+- library-add --name <名称>：固定创建 <root>/libraries/<名称>，不接受外部路径，不改项目默认库。
+- project-bind --project . --library central：登记已有项目，enabled 初始为空，旧入口不动。
+- library-use --project . --name <名称>：只改当前项目默认库，已有 enabled 和链接不动。
+- --library <名称>：单次选库，不改变项目默认；check/updates --all-libraries 范围是当前根登记的全部库。
+- project-list：仅核验已登记项目及实际 hub 入口，不全盘找项目，不自动清理失联记录。
+- project-rebind --mode move|copy：路径变化需明确计划；move 要求原路径不存在并保留 ID，copy 分配新 ID。两者保留入口，不保证复制来的链接有效，执行后检查。
 
-最终中央路径故意不包含 `.e8-skill-linker/AgentSkills` 时，说明它不符合默认命名空间并等待确认；执行层使用 `--allow-non-namespaced-central`。两类风险同时存在时必须同时满足两个确认条件。
+所有写入默认 dry-run，最终展示计划并结束本轮等用户确认。同一已确认计划无需逐条再问。元数据写入采用锁和执行前状态核对，普通写入失败尝试回滚；不承诺多命令、整批操作或断电时全局原子性。残留写锁需先审查，不自动删除。
+
+## v2 显式迁移，拒绝静默兼容
+
+运行 migrate-config --root <不存在的新根> --main-library <旧主库名> 预览。用户必须明确旧库中哪个成为 central，其他库保留名称并集中到 libraries/ 下。它复制原库、重建新库内部的中央链接、核对内容和 Git 清单，再备份旧用户配置并写入 v3 指针。执行必须携带计划摘要 --expected-digest，摘要不是批准令牌。
+
+原库和旧项目链接保留不动；旧项目 v2 配置需要 project-bind --replace-v2 单独备份并改为绑定。旧链接仍指向旧库时要另列 unlink/link 计划，不能报告所有项目迁移完成。无需迁移的用户可新建空根，但不能直接覆盖已有配置。
+
+当前自动迁移边界：仅 v2 用户配置；拒绝含本地接管记录 .skill-linker-local 的库、未登记嵌套链接、worktree/submodule Git 文件、特殊文件、重叠来源路径；每库最多 10,000 项、256 MiB、32 层。v1、超限或有接管凭据的库先单独审查，不提供兼容分支。复制失败保留新根的部分副本供诊断，旧原件/用户指针不变；不能直接重跑或删除而不审查。
+
+管理根不得与用户级/当前项目级 Agent 发现目录重叠，不能是盘符根、用户目录或项目根本身；不提供 allow-global 等绕过开关。

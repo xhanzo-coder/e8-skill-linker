@@ -1,180 +1,104 @@
 # CLI 命令参考
 
-使用 `scripts/skill_manager.py` 执行确定性操作。不带 `--execute` 的写入命令只输出计划。
+以下命令从 skill 目录执行；其他目录须使用 skill_manager.py 的真实绝对路径。当前项目取运行环境的实际 cwd，使用 --project .；项目根必须已存在，不重打路径中的引号、不忽略 cd 失败。
 
-项目根目录必须已存在。当前项目使用工具返回的真实工作目录，并传 `--project .`；脚本不自动创建项目根。跨项目操作使用已经核实、在计划中展示的绝对路径。`cd` 报错时停止，不能接着依赖未知工作目录执行命令。
+写入命令不带 --execute 只预览。预览成功不是批准：在最终回复展示完整计划，结束本轮，收到确认后对同一计划加 --execute。检查命令只读；updates --execute 会 fetch，仍须确认。--home 用于明确的用户目录，测试必须使用隔离目录。
 
-dry-run 后默认将完整计划交给用户并结束回复；收到对该计划的确认后再执行相同参数加 `--execute`。用户主动、明确要求跳过确认且作用范围明确，或对同一计划已有确认时，无需再次询问。完整的 CLI 参数本身不等于确认。目标已满足时按[安装交互规则](output-and-confirmation.md)报告零变更，不为验证而重跑写入命令。执行后的 `verified_project_entries` 给出实际项目、入口、直接目标和 skill 身份。
-
-## 检查
-
-首次盘点使用 `onboard`（只读、不联网、不安装管理器），旧 `inspect` 仍用于路径与配置级诊断：
+## 盘点和健康检查
 
 ```bash
-python3 scripts/skill_manager.py onboard --project .
-python3 scripts/skill_manager.py inspect --project .
-python3 scripts/skill_manager.py config --project .
-python3 scripts/skill_manager.py library-list --project .
-python3 scripts/skill_manager.py check --project . --include-user --include-central
-python3 scripts/skill_manager.py check --project . --library work
-python3 scripts/skill_manager.py check --project . --all-libraries
+python scripts/skill_manager.py onboard --project .
+python scripts/skill_manager.py inspect --project .
+python scripts/skill_manager.py config --project .
+python scripts/skill_manager.py library-list --project .
+python scripts/skill_manager.py project-list --project .
+python scripts/skill_manager.py check --project . --include-user --include-central
+python scripts/skill_manager.py check --project . --all-libraries
 ```
 
-## 创建 schema v2 配置
+config 不再写配置。project-list 不扫描未登记项目。
 
-首次配置一个名为 `personal` 的用户级中央库：
+## 初始化、连接和项目选择
 
 ```bash
-python3 scripts/skill_manager.py config \
-  --scope user \
-  --library personal \
-  --central ~/.e8-skill-linker/AgentSkills \
-  --mode centralize
+# 首次：明确选择管理根，固定生成 libraries/central
+python scripts/skill_manager.py root-init --project . --root /absolute/SkillsHub
+
+# 已有合法 v3 根但无用户指针：先预览，再确认后携带输出的 root_id
+python scripts/skill_manager.py root-connect --project . --root /absolute/SkillsHub
+python scripts/skill_manager.py root-connect --project . --root /absolute/SkillsHub --expected-root-id <root_id> --execute
+
+# 根存在后，给当前项目绑定默认主库
+python scripts/skill_manager.py project-bind --project . --library central
+
+# 仅确有隔离需求时，用户自定名称（project-alpha 只是示例）
+python scripts/skill_manager.py library-add --name project-alpha
+python scripts/skill_manager.py library-use --project . --name project-alpha
+
+# 项目搬家或复制之后，明确选择一种重绑定方式
+python scripts/skill_manager.py project-rebind --project . --mode move
+python scripts/skill_manager.py project-rebind --project . --mode copy
 ```
 
-用户确认后增加 `--execute`。用户提供自定义父目录时使用 `--central-base`，脚本会派生 `<parent>/.e8-skill-linker/AgentSkills`。
+除显式演示确认后执行的 root-connect 外，上例均预览；其他写入同样确认后加 --execute。项目默认库变更不改已有链接。没有 --scope、--central-base、--activate 或 allow-global 绕过参数。
 
-`config` 会创建一份新配置；目标配置已存在时，计划会明确显示 `will_replace_config`。增加中央库应使用 `library-add`，不用 `config` 覆盖整份配置。
-
-## v1 配置迁移
+## v2 到 v3
 
 ```bash
-python3 scripts/skill_manager.py migrate-config \
-  --scope user \
-  --library personal
+python scripts/skill_manager.py migrate-config --root /absolute/NewSkillsHub --main-library <旧主库名>
+# 确认后：
+python scripts/skill_manager.py migrate-config --root /absolute/NewSkillsHub --main-library <旧主库名> --expected-digest <摘要> --execute
+
+# 已迁移根后，处理旧 v2 项目配置，旧入口仍保留
+python scripts/skill_manager.py project-bind --project . --library central --replace-v2
 ```
 
-确认输出中的原路径、schema 与风险后：
-
-```bash
-python3 scripts/skill_manager.py migrate-config \
-  --scope user \
-  --library personal \
-  --execute
-```
-
-迁移只更改配置文件，不移动中央库内容。
-
-## 命名中央库
-
-```bash
-# 增加 work，但不切换
-python3 scripts/skill_manager.py library-add \
-  --scope user \
-  --name work \
-  --central-base /Volumes/Work
-
-# 增加后立即设为活动库
-python3 scripts/skill_manager.py library-add \
-  --scope user \
-  --name work \
-  --central-base /Volumes/Work \
-  --activate
-
-# 切换已登记的活动库
-python3 scripts/skill_manager.py library-use --scope user --name work
-```
-
-确认后增加 `--execute`。`library-use` 只改变配置选择，不静默重写项目中的旧链接。
-
-`install-repo`、`link`、`link-many`、`check`、`updates` 和 `update` 可用 `--library work` 单次选库。`updates`、`check` 的 `--all-libraries` 处理当前生效配置内所有库，与 `--library` 互斥；不会合并用户级与项目级配置。
-
-选择 Agent 全局 skills 目录需要用户明确确认后增加 `--allow-global-central`。最终路径故意不包含 `.e8-skill-linker/AgentSkills` 时，需要确认后增加 `--allow-non-namespaced-central`。
+这是复制迁移，不删除旧库、不自动重连项目。v1、有本地接管记录、嵌套链接或超限库不能直接迁移，详见[根与绑定](bootstrap-and-central-library.md)。
 
 ## 仓库安装
 
-先根据远程仓库结构确定 skill 规格，然后 dry-run：
-
 ```bash
-python3 scripts/skill_manager.py install-repo \
-  --project . \
-  --library personal \
+python scripts/skill_manager.py install-repo --project . --library central \
   --repo-url https://github.com/example/skills.git \
-  --skills writer=skills/writer,reviewer=.agents/skills/reviewer \
-  --enable-project
+  --skills writer=skills/writer,reviewer=.agents/skills/reviewer --enable-project
 ```
 
-根目录就是 skill 时使用 `--skills skill-name=.`。计划会列出 `.repos/<host>/<owner>/<repo>`、中央 skill 入口、可选项目入口和 `.skill-linker-lock.json`。用户确认后增加 `--execute`。
+项目启用前必须 project-bind。只收藏到库时省略 --enable-project。仓库根 skill 使用 name=.；目录与名称不同可用 codex-with-chatgpt=skill。名称必须等于 SKILL.md frontmatter，来源路径不得越界。计划列出完整 .repos 路径、中央入口、项目入口、Git 清单和项目 enabled 变化。
 
-来源目录名可以与 skill 名称不同：`--skills codex-with-chatgpt=skill` 或 `--skills writer=packages/tools/definition` 都使用显式映射。入口名必须与对应 `SKILL.md` 的 frontmatter `name` 一致，来源路径仍必须位于仓库内。
-
-`install-repo` 要求完整计划中的 skill 名称与路径都已知。它会原子化地克隆仓库、验证 `SKILL.md`、创建入口并写入来源清单；失败时回滚本次新建内容。
-
-根目录 skill 的名称可以不同于仓库名。仓库已经登记时复用本地版本；再运行相同命令可追加 skill，或用 `--enable-project --project <另一个项目>` 启用已有 skill。新增失败保留已有仓库、入口与清单，不自动 fetch。
-
-`clone` 保留为低层命令，只克隆并发现 skills，不登记到中央库。
+确认后克隆、校验、建入口并登记；普通失败回滚本次新增内容。已登记仓库复用本地版本，追加 skill 不自动 fetch。clone 是低层命令，不自动登记中央库。
 
 ## 项目入口
 
 ```bash
-python3 scripts/skill_manager.py init --project . --agents claude,codex
-python3 scripts/skill_manager.py link --project . --source ~/.e8-skill-linker/AgentSkills/write-blog
-python3 scripts/skill_manager.py link-many --project . --sources /central/a,/central/b
-python3 scripts/skill_manager.py unlink --target .agents/skills/write-blog
+python scripts/skill_manager.py init --project . --agents claude,codex
+python scripts/skill_manager.py link --project . --library central --source /absolute/SkillsHub/libraries/central/writer
+python scripts/skill_manager.py link-many --project . --sources /absolute/SkillsHub/libraries/central/a,/absolute/SkillsHub/libraries/central/b
+python scripts/skill_manager.py unlink --project . --target .agents/skills/writer
 ```
 
-开始写入前先运行 dry-run，用户确认后增加 `--execute`。`unlink` 只删除链接或 junction，不删除中央原件。
+项目入口指向库根层 skill，不直接指向 .repos。link/link-many 与 unlink 同步绑定中的 enabled；冲突停止，不覆盖真实目录。init 只统一 Agent 入口，不自动启用库内全部 skills。
 
-## 迁移已有真实 skill
+## 旧普通目录接管与恢复
 
 ```bash
-python3 scripts/skill_manager.py migrate \
-  --project . \
-  --source ~/.claude/skills/write-blog \
-  --central ~/.e8-skill-linker/AgentSkills
+python scripts/skill_manager.py migrate --project . --library central --central /absolute/SkillsHub/libraries/central --source ~/.claude/skills/write-blog
+python scripts/skill_manager.py restore-adoption --project . --receipt /absolute/receipt.json
 ```
 
-`--central` 必须与当前活动中央库一致且位于 Agent 发现目录之外。本命令先输出备份、恢复凭据、原入口范围和 `expected_digest`。审查外部路径依赖并获用户确认后，在同一命令上添加 `--expected-digest <计划中的摘要> --dependencies-reviewed --execute`。不提供这两个前置条件就拒绝写入；摘要不是用户批准令牌。
-
-原件保留为备份，原位置变成指向中央本地快照的链接；不会登记成可 Git 更新的仓库。只处理普通独立目录，不复制嵌套链接、Git 元数据或特殊文件。详细边界见[首次使用与接管](first-use-and-adoption.md)。
-
-恢复先预览：
-
-```bash
-python3 scripts/skill_manager.py restore-adoption \
-  --project . \
-  --receipt /absolute/path/from-plan/receipt.json
-```
-
-用户确认后加 `--execute`。恢复原真实目录并保留中央副本；源入口、备份或中央内容发生变化时停止，不覆盖。
+migrate 执行还须 --expected-digest <摘要> --dependencies-reviewed --execute；先人工审查外部依赖，摘要不代替用户确认。恢复确认后加 --execute；中央副本保留。普通独立目录接管不伪造 Git 来源；原可见范围不变。只有标准项目 hub 同名入口纳入 enabled；用户级、别名和直接 Agent 入口不冒充项目 hub 管理项。
 
 ## Git 检查与更新
 
 ```bash
-python3 scripts/skill_manager.py git-status --repo /central/.repos/github.com/example/skills
-
-# 默认仅检查活动库的本地缓存
-python3 scripts/skill_manager.py updates --project .
-
-# 确认后获取指定库的最新远程状态
-python3 scripts/skill_manager.py updates --project . --library work --execute
-
-# 检查生效配置中的全部库
-python3 scripts/skill_manager.py updates --project . --all-libraries --execute
-
-# 确认后更新具体仓库
-python3 scripts/skill_manager.py update --library work --repo /central/.repos/github.com/example/skills --execute
-
-# 切换版本
-python3 scripts/skill_manager.py checkout --repo /central/.repos/github.com/example/skills --ref v1.2.0
+python scripts/skill_manager.py git-status --repo /absolute/SkillsHub/libraries/central/.repos/github.com/example/skills
+python scripts/skill_manager.py updates --project .
+python scripts/skill_manager.py updates --project . --all-libraries
+python scripts/skill_manager.py update --project . --library central --repo /absolute/SkillsHub/libraries/central/.repos/github.com/example/skills
+python scripts/skill_manager.py checkout --project . --repo /absolute/SkillsHub/libraries/central/.repos/github.com/example/skills --ref v1.2.0
 ```
 
-`updates` 不再接受任意 `--central` 路径，只处理选定库清单中的仓库。结果区分 `local-cache`、`fetched`、`fetch-failed`；失败或没有 upstream 时不能声称最新。
-
-`update` 先 fetch，验证候选提交的已登记 skill，再用 `git merge --ff-only <候选SHA>` 更新。更新后校验入口并同步 revision。有本地改动、detached HEAD、没有 upstream、不能快进、skill 路径消失或名称变化时停止。该命令没有 `--allow-dirty` 绕过选项。
-
-`--library` 与 `--repo` 同用时验证仓库归属。新增的上游 skills 只列出，不自动启用；追加入口需要再次运行 `install-repo`。
+updates 不带 --execute 只读缓存；确认后加 --execute 才 fetch，区分 local-cache/fetched/fetch-failed。update 验证候选 skill 后按固定 SHA 快进；dirty、无 upstream、detached、分叉或身份变化停止。checkout 和 update 报告已登记项目影响，不声称覆盖全机。项目不可访问时影响列表不完整，必须披露。
 
 ## Windows
 
-目录 symlink 权限不足时可明确使用 `--link-type junction`：
-
-```powershell
-python scripts/skill_manager.py install-repo `
-  --repo-url https://github.com/example/skills.git `
-  --skills writer=skills/writer `
-  --enable-project `
-  --link-type junction
-```
-
-用户确认后增加 `--execute`。不让 Agent 静默提权或绕过 UAC。
+支持目录 junction；明确加 --link-type junction，不静默提权。symlink 权限失败需解释，不能绕过 UAC。命令输出的 verified_project_entries 是实际项目入口证据，不能用中央库成功代替项目成功。

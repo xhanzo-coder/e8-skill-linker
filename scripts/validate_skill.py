@@ -59,9 +59,10 @@ def validate(skill_dir: Path) -> None:
     missing_references = REQUIRED_REFERENCES.difference(path.name for path in references.glob("*.md"))
     if missing_references:
         raise ValueError(f"缺少 reference 文件: {sorted(missing_references)}")
-    script = skill_dir / "scripts" / "skill_manager.py"
-    if not script.is_file():
-        raise ValueError(f"缺少管理脚本: {script}")
+    for filename in ("skill_manager.py", "root_state.py"):
+        script = skill_dir / "scripts" / filename
+        if not script.is_file():
+            raise ValueError(f"缺少管理脚本: {script}")
     agent_metadata = skill_dir / "agents" / "openai.yaml"
     if not agent_metadata.is_file():
         raise ValueError(f"缺少 Agent UI 元数据: {agent_metadata}")

@@ -26,11 +26,11 @@ description: 安全管理 Agent skills 的命名中央库、Git 仓库来源和�
 
 ## 中央库配置
 
-schema v2 允许在一份配置中登记多个命名中央库，但每个项目只有一个 `active_library`。项目级配置整体优先于用户级配置，不合并两者。v1 配置必须经过 `migrate-config` 显式升级；不做静默兼容。
+schema v3 使用一个用户选定的管理根。固定主库名为 `central`，其他库由用户自命名，全部放在 `<root>/libraries/<name>`。用户配置只指向管理根；根登记表保存唯一库清单与已登记项目；项目绑定只保存身份、默认库和启用来源，不覆盖库清单。先读[管理根与绑定](references/bootstrap-and-central-library.md)。
 
-安装、链接、检查和更新可用 `--library <name>` 单次选库，不改变默认库。`updates` 和 `check` 支持 `--all-libraries`，范围为当前生效配置。切换默认库不迁移项目链接，报告已有链接的实际库归属。
+安装、链接、检查和更新可用 `--library <name>` 单次选库，不改变项目默认库。`updates` 和 `check` 支持 `--all-libraries`，范围为管理根登记的全部库。新项目推荐绑定 central，不自动新建独立库；项目启用必须先绑定。切换默认库不迁移项目链接或更改 enabled 来源。
 
-没有配置时，推荐非全局中央库：macOS/Linux 使用 `~/.e8-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.e8-skill-linker\AgentSkills`。自定义父目录必须派生为 `<parent>/.e8-skill-linker/AgentSkills`。
+没有配置时，建议管理根 `~/.e8-skill-linker/SkillsHub`，用户可选择其他根路径，不再追加隐藏命名空间。检测必须验证用户指针、根登记表、库身份标记、项目 ID/登记路径和真实入口；不能仅按目录名认定。缺失、离线或身份冲突停止，不自动回退主库。v2 用户配置使用显式复制迁移，旧库/旧链接保留；v1 或带接管凭据的库另行审查，不静默兼容。项目移动/复制须显式重绑定。
 
 ## 不可违反的安全规则
 
@@ -45,7 +45,7 @@ schema v2 允许在一份配置中登记多个命名中央库，但每个项目�
 
 ## 按需路由
 
-- 自举、schema v2、命名库和首次配置：[references/bootstrap-and-central-library.md](references/bootstrap-and-central-library.md)
+- 自举、schema v3、根身份、固定主库、项目绑定和 v2 迁移：[references/bootstrap-and-central-library.md](references/bootstrap-and-central-library.md)
 - 首次盘点、来源证据、选择性接管和恢复：[references/first-use-and-adoption.md](references/first-use-and-adoption.md)
 - 第三方仓库安装、`.repos`、来源清单、更新、checkout 和 fork：[references/repository-store-and-git.md](references/repository-store-and-git.md)
 - 项目入口、批量链接、迁移和停用：[references/link-sync-and-removal.md](references/link-sync-and-removal.md)

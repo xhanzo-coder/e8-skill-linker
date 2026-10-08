@@ -14,6 +14,9 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import uuid
+import root_state
+from root_state import load_effective_config
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
@@ -21,18 +24,17 @@ from urllib.parse import urlparse
 
 PROJECT_SKILL_DIRS = (".agents/skills", ".codex/skills", ".claude/skills")
 USER_SKILL_DIRS = ("~/.agents/skills", "~/.codex/skills", "~/.claude/skills")
-DEFAULT_CENTRAL_DIR = "~/.e8-skill-linker/AgentSkills"
+DEFAULT_CENTRAL_DIR = "~/.e8-skill-linker/SkillsHub/libraries/central"
 EXTRA_NON_GLOBAL_CENTRAL_DIRS = ["~/Skills"]
-CENTRAL_NAMESPACE = Path(".e8-skill-linker") / "AgentSkills"
 CONFIG_FILENAME = ".skill-linker.json"
-CONFIG_SCHEMA_VERSION = 2
-DEFAULT_LIBRARY_NAME = "personal"
+CONFIG_SCHEMA_VERSION = 3
+DEFAULT_LIBRARY_NAME = "central"
 REPOSITORY_DIRNAME = ".repos"
 REGISTRY_FILENAME = ".skill-linker-lock.json"
 REGISTRY_SCHEMA_VERSION = 1
 VALID_DEFAULT_MODES = {"ask", "centralize", "project-local"}
 IS_WINDOWS = platform.system() == "Windows"
-VERSION = "0.2.0"
+VERSION = "0.3.0-dev"
 LOCAL_RECORD_DIR = ".skill-linker-local"
 MAX_INVENTORY_FILES = 10000
 MAX_INVENTORY_BYTES = 256 * 1024 * 1024
@@ -417,15 +419,6 @@ def default_central_dir(home: Path) -> Path:
     return expand_with_home(DEFAULT_CENTRAL_DIR, home).absolute()
 
 
-def central_from_base(base: Path) -> Path:
-    return base / CENTRAL_NAMESPACE
-
-
-def has_central_namespace(path: Path) -> bool:
-    parts = path.parts
-    return len(parts) >= 2 and parts[-2:] == CENTRAL_NAMESPACE.parts
-
-
 def user_skill_paths(home: Path) -> list[Path]:
     return [expand_with_home(raw, home).absolute() for raw in USER_SKILL_DIRS]
 
@@ -440,139 +433,8 @@ def global_dir_warning(path: Path, home: Path) -> str | None:
         return None
     return (
         "该路径是 Agent 全局 skills 目录。把中央库放在这里可能让其中的 skills 对所有项目全局可见；"
-        "如果只是集中存放 skill 原件，推荐使用 ~/.e8-skill-linker/AgentSkills。"
+        "管理根不得与发现目录重叠；推荐 ~/.e8-skill-linker/SkillsHub，主库为 libraries/central。"
     )
-
-
-def namespace_warning(path: Path) -> str | None:
-    if has_central_namespace(path):
-        return None
-    return (
-        "该 central 路径没有包含 .e8-skill-linker/AgentSkills 命名空间。"
-        "如果用户给的是想放置中央库的父目录，请使用 --central-base，让脚本自动派生 <父目录>/.e8-skill-linker/AgentSkills。"
-    )
-
-
-def validate_library_name(name: str) -> str:
-    if not isinstance(name, str) or len(name) > 64 or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
-        raise ValueError("中央库名称必须为 1-64 位小写字母、数字或单个连字符分隔的片段")
-    return name
-
-
-def command_library_name(name: str) -> str:
-    try:
-        return validate_library_name(name)
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-
-
-def config_data(libraries: dict[str, Path], active_library: str, default_mode: str) -> dict:
-    return {
-        "schema_version": CONFIG_SCHEMA_VERSION,
-        "libraries": {name: {"path": str(path)} for name, path in sorted(libraries.items())},
-        "active_library": active_library,
-        "default_mode": default_mode,
-    }
-
-
-def normalize_config(path: Path, scope: str, data: dict, home: Path) -> dict:
-    if "schema_version" not in data:
-        if set(data) == {"central_skills_dir", "default_mode"}:
-            raise ValueError("检测到 v1 配置；请先运行 migrate-config 显式升级到 schema_version 2")
-        raise ValueError("配置缺少必需字段: ['schema_version']")
-    required = {"schema_version", "libraries", "active_library", "default_mode"}
-    missing = required.difference(data)
-    if missing:
-        raise ValueError(f"配置缺少必需字段: {sorted(missing)}")
-    unknown = set(data).difference(required)
-    if unknown:
-        raise ValueError(f"配置包含未知字段: {sorted(unknown)}")
-    if data["schema_version"] != CONFIG_SCHEMA_VERSION:
-        raise ValueError(f"schema_version 必须为 {CONFIG_SCHEMA_VERSION}")
-    raw_libraries = data["libraries"]
-    if not isinstance(raw_libraries, dict) or not raw_libraries:
-        raise ValueError("libraries 必须是非空 JSON object")
-    libraries: dict[str, dict] = {}
-    canonical_paths: dict[Path, str] = {}
-    for name, raw_library in raw_libraries.items():
-        validate_library_name(name)
-        if not isinstance(raw_library, dict) or set(raw_library) != {"path"}:
-            raise ValueError(f"中央库 {name} 必须仅包含非空 path 字段")
-        raw_path = raw_library["path"]
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            raise ValueError(f"中央库 {name} 的 path 必须是非空字符串")
-        central = resolve_from(raw_path, home, path.parent)
-        canonical_path = canonical(central)
-        if canonical_path in canonical_paths:
-            raise ValueError(f"中央库 {name} 与 {canonical_paths[canonical_path]} 指向同一路径")
-        canonical_paths[canonical_path] = name
-        warning = global_dir_warning(central, home)
-        libraries[name] = {
-            "path": str(central),
-            "exists": central.exists() and central.is_dir(),
-            "is_global_agent_dir": bool(warning),
-            "warning": warning,
-        }
-    active_library = data["active_library"]
-    if not isinstance(active_library, str):
-        raise ValueError("active_library 必须是字符串")
-    validate_library_name(active_library)
-    if active_library not in libraries:
-        raise ValueError(f"active_library 不存在于 libraries: {active_library}")
-    mode = data["default_mode"]
-    if not isinstance(mode, str) or mode not in VALID_DEFAULT_MODES:
-        raise ValueError(f"default_mode 必须是 {sorted(VALID_DEFAULT_MODES)} 之一")
-    active = libraries[active_library]
-    return {
-        "source": scope,
-        "path": str(path),
-        "schema_version": CONFIG_SCHEMA_VERSION,
-        "libraries": libraries,
-        "active_library": active_library,
-        "central_skills_dir": active["path"],
-        "central_exists": active["exists"],
-        "central_is_global_agent_dir": active["is_global_agent_dir"],
-        "warning": active["warning"],
-        "default_mode": mode,
-    }
-
-
-def load_effective_config(project: Path, home: Path) -> dict:
-    paths = config_paths(project, home)
-    for scope, raw_path in (("project", paths["project"]), ("user", paths["user"])):
-        path = Path(raw_path)
-        try:
-            data = read_config_file(path)
-        except ValueError as exc:
-            return {
-                "source": "error",
-                "path": str(path),
-                "error": str(exc),
-                "search_paths": paths,
-            }
-        if data is not None:
-            try:
-                config = normalize_config(path, scope, data, home)
-            except ValueError as exc:
-                return {
-                    "source": "error",
-                    "path": str(path),
-                    "error": str(exc),
-                    "search_paths": paths,
-                }
-            config["search_paths"] = paths
-            return config
-    return {
-        "source": None,
-        "path": None,
-        "schema_version": None,
-        "libraries": {},
-        "active_library": None,
-        "central_skills_dir": None,
-        "central_exists": False,
-        "default_mode": "ask",
-        "search_paths": paths,
-    }
 
 
 def global_agent_dirs(home: Path) -> list[str]:
@@ -585,13 +447,6 @@ def candidate_central_dirs(home: Path, configured: str | None = None) -> list[st
         configured_path = expand(configured)
         if configured_path.exists():
             candidates.append(configured_path)
-    github = home / "GitHub"
-    if github.exists():
-        for repo in sorted(github.iterdir(), key=lambda p: p.name):
-            for suffix in ("skills", ".agents/skills"):
-                candidate = repo / suffix
-                if candidate.exists():
-                    candidates.append(candidate)
     for raw in [DEFAULT_CENTRAL_DIR, *EXTRA_NON_GLOBAL_CENTRAL_DIRS]:
         candidate = expand_with_home(raw, home).absolute()
         if candidate.exists():
@@ -647,208 +502,231 @@ def inspect(args: argparse.Namespace) -> int:
     return 0
 
 
-def config(args: argparse.Namespace) -> int:
-    project = existing_project_directory(args.project)
-    home = expand(args.home)
-    if args.central and args.central_base:
-        raise SystemExit("不能同时提供 --central 和 --central-base")
-    if not args.central and not args.central_base:
-        print(json.dumps(load_effective_config(project, home), ensure_ascii=False, indent=2))
-        return 0
-
-    central_base = resolve_from(args.central_base, home, project) if args.central_base else None
-    central = central_from_base(central_base) if central_base else resolve_from(args.central, home, project)
-    target = project / CONFIG_FILENAME if args.scope == "project" else home / CONFIG_FILENAME
-    library_name = command_library_name(args.library)
-    data = config_data({library_name: central}, library_name, args.mode)
-    warning = global_dir_warning(central, home)
-    warnings = [item for item in (warning, None if args.central_base else namespace_warning(central)) if item]
-    plan = {
-        "write_config": str(target),
-        "scope": args.scope,
-        "central_base_dir": str(central_base) if central_base else None,
-        "central_namespace": str(CENTRAL_NAMESPACE),
-        "config": data,
-        "will_create_config_parent": not target.parent.exists(),
-        "will_create_central_dir": not central.exists(),
-        "will_replace_config": target.exists(),
-        "central_is_global_agent_dir": bool(warning),
-        "warnings": warnings,
-        "recommended_default_central_dir": str(default_central_dir(home).resolve(strict=False)),
-    }
-    print(json.dumps({"planned_config": plan}, ensure_ascii=False, indent=2))
-    if not args.execute:
-        print("当前只是 dry-run；用户确认后再传入 --execute 写入配置文件")
-        return 0
-    if warning and not args.allow_global_central:
-        raise SystemExit("中央目录是 Agent 全局 skills 目录；明确确认后增加 --allow-global-central")
-    if namespace_warning(central) and not args.allow_non_namespaced_central:
-        raise SystemExit(
-            "中央目录缺少 .e8-skill-linker/AgentSkills 命名空间；"
-            "明确确认这是最终目录后增加 --allow-non-namespaced-central"
-        )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    central.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"written_config": str(target)}, ensure_ascii=False, indent=2))
-    return 0
+def project_binding_change(project: Path, home: Path, additions: dict[str, str], removals: list[str]) -> tuple:
+    """Prepare an exact project metadata change before touching any skill entry."""
+    root, catalog = root_state.read_user(home)
+    binding = root_state.read_binding(project, catalog)
+    if binding is None:
+        raise SystemExit("项目尚未绑定；先将 project-bind 纳入确认计划")
+    path = project / CONFIG_FILENAME
+    before = root_state.metadata_snapshot(path, binding)
+    for name, library in additions.items():
+        root_state.name(name)
+        if library not in catalog["libraries"]:
+            raise SystemExit("启用项引用未登记库")
+        if name in binding["enabled"] and binding["enabled"][name] != library:
+            raise SystemExit(f"已登记启用项来自其他库，先明确停用再切换: {name}")
+        binding["enabled"][name] = library
+    for name in removals:
+        if name not in binding["enabled"]:
+            raise SystemExit(f"待停用 skill 未登记在项目 enabled 中: {name}")
+        del binding["enabled"][name]
+    return root, path, binding, before
 
 
-def config_path_for_scope(project: Path, home: Path, scope: str) -> Path:
-    if scope == "project":
-        return project / CONFIG_FILENAME
-    if scope == "user":
-        return home / CONFIG_FILENAME
-    raise SystemExit(f"未知配置作用域: {scope}")
+def save_project_binding(change: tuple) -> None:
+    root, path, binding, before = change
+    root_state.commit_metadata(root, {path: binding}, {path: before})
 
 
-def load_scoped_config(project: Path, home: Path, scope: str) -> tuple[Path, dict, dict]:
-    path = config_path_for_scope(project, home, scope)
-    data = read_config_file(path)
-    if data is None:
-        raise SystemExit(f"配置文件不存在: {path}")
+def library_name_for_path(project: Path, home: Path, central: Path) -> str:
+    config = load_effective_config(project, home)
+    if config["source"] == "error":
+        raise SystemExit(config["error"])
+    matches = [name for name, item in config["libraries"].items() if Path(item["path"]) == central]
+    if len(matches) != 1:
+        raise SystemExit("中央路径不是唯一登记库")
+    return matches[0]
+
+
+def registered_project_report(root: Path, catalog: dict, project_id: str) -> dict:
+    project = Path(catalog["projects"][project_id]["path"])
+    report = {"project_id": project_id, "path": str(project), "default_library": None,
+              "enabled": [], "unrecorded_entries": [], "errors": []}
     try:
-        normalized = normalize_config(path, scope, data, home)
-    except ValueError as exc:
-        raise SystemExit(f"配置错误: {exc}") from exc
-    return path, data, normalized
+        if not project.is_dir():
+            raise ValueError("项目路径缺失；未自动删除登记")
+        binding = root_state.read_binding(project, catalog)
+        if binding is None or binding["project_id"] != project_id:
+            raise ValueError("项目绑定身份不符")
+        report["default_library"] = binding["default_library"]
+        hub = project / ".agents" / "skills"
+        root_state.plain_location(hub)
+        for name, library in binding["enabled"].items():
+            target = root / catalog["libraries"][library]["path"] / name
+            entry = hub / name
+            item = {"name": name, "library": library, "entry": str(entry), "target": str(target), "valid": False}
+            try:
+                if validate_link_destination(entry, target) != "same-link" or read_skill_name(entry) != name:
+                    raise ValueError("入口缺失或 skill 身份不符")
+                if not is_path_inside(target, root / catalog["libraries"][library]["path"]):
+                    raise ValueError("中央入口越出所属库")
+                item["valid"] = True
+            except (OSError, ValueError, SystemExit) as exc:
+                item["error"] = str(exc)
+                report["errors"].append({"skill": name, "error": str(exc)})
+            report["enabled"].append(item)
+        if hub.is_dir():
+            report["unrecorded_entries"] = [str(entry) for entry in sorted(hub.iterdir())
+                                            if not entry.name.startswith(".") and entry.name not in binding["enabled"]]
+    except (OSError, ValueError) as exc:
+        report["errors"].append({"error": str(exc)})
+    return report
 
 
-def migration_data(path: Path, data: dict, home: Path, library_name: str) -> dict:
-    if set(data) != {"central_skills_dir", "default_mode"}:
-        raise SystemExit("只能迁移字段为 central_skills_dir + default_mode 的 v1 配置")
-    central_raw = data["central_skills_dir"]
-    mode = data["default_mode"]
-    if not isinstance(central_raw, str) or not central_raw.strip():
-        raise SystemExit("v1 central_skills_dir 必须是非空字符串")
-    if not isinstance(mode, str) or mode not in VALID_DEFAULT_MODES:
-        raise SystemExit(f"v1 default_mode 必须是 {sorted(VALID_DEFAULT_MODES)} 之一")
-    central = resolve_from(central_raw, home, path.parent)
-    validated_name = command_library_name(library_name)
-    return config_data({validated_name: central}, validated_name, mode)
+def project_list(args: argparse.Namespace) -> int:
+    root, catalog = root_state.read_user(expand(args.home))
+    reports = [registered_project_report(root, catalog, key) for key in catalog["projects"]]
+    print(json.dumps({"root": str(root), "projects": reports, "scope": "registered-projects-only"}, ensure_ascii=False, indent=2))
+    return int(any(item["errors"] for item in reports))
+
+
+def affected_projects(home: Path, library: str, names: Iterable[str]) -> dict:
+    root, catalog = root_state.read_user(home)
+    names = set(names)
+    reports = [registered_project_report(root, catalog, key) for key in catalog["projects"]]
+    affected = []
+    for report in reports:
+        declared = [item["name"] for item in report["enabled"] if item["library"] == library and item["name"] in names]
+        observed = []
+        for raw in report["unrecorded_entries"]:
+            entry = Path(raw)
+            if entry.is_symlink() or is_junction(entry):
+                if immediate_link_target(entry) in {root / catalog["libraries"][library]["path"] / name for name in names}:
+                    observed.append(entry.name)
+        if declared or observed:
+            affected.append({"project": report["path"], "declared_skills": declared, "unrecorded_links": observed})
+    return {"scope": "registered-projects-only", "affected": affected,
+            "inspection_errors": [report for report in reports if report["errors"]],
+            "note": "未登记项目和用户级外部链接未枚举；不能据此保证没有其他引用。"}
+
+
+def migration_manifest(source: Path, ignored_entries: set[str]) -> dict:
+    """Full Git/local library copy evidence, excluding only validated root entry links."""
+    manifest = {}
+    total = 0
+    pending = [source]
+    while pending:
+        directory = pending.pop()
+        for child in sorted(directory.iterdir()):
+            if directory == source and child.name in ignored_entries:
+                continue
+            relative = child.relative_to(source).as_posix()
+            if child.is_symlink() or is_junction(child):
+                raise ValueError(f"库迁移不追踪内部或未登记链接，请单独审查: {child}")
+            if len(manifest) >= MAX_INVENTORY_FILES or len(child.relative_to(source).parts) > 32:
+                raise ValueError("库迁移超过扫描上限")
+            if child.is_dir():
+                manifest[relative] = {"type": "directory"}
+                pending.append(child)
+            elif child.is_file():
+                if child.name == ".git":
+                    raise ValueError("外部 Git worktree/submodule 元数据需单独审查")
+                total += child.stat().st_size
+                if total > MAX_INVENTORY_BYTES:
+                    raise ValueError("库迁移超过 256 MiB，需单独制定迁移方案")
+                manifest[relative] = {"type": "file", "hash": hashlib.sha256(child.read_bytes()).hexdigest()}
+            else:
+                raise ValueError(f"不支持的文件类型: {child}")
+    return manifest
 
 
 def migrate_config(args: argparse.Namespace) -> int:
-    project = expand(args.project)
-    home = expand(args.home)
-    target = config_path_for_scope(project, home, args.scope)
-    data = read_config_file(target)
-    if data is None:
-        raise SystemExit(f"配置文件不存在: {target}")
-    migrated = migration_data(target, data, home, args.library)
-    central = Path(migrated["libraries"][args.library]["path"])
-    warning = global_dir_warning(central, home)
-    warnings = [item for item in (warning, namespace_warning(central)) if item]
-    plan = {
-        "config_path": str(target),
-        "from_schema": 1,
-        "to_schema": CONFIG_SCHEMA_VERSION,
-        "config": migrated,
-        "warnings": warnings,
-        "will_create_central_dir": not central.exists(),
-    }
-    print(json.dumps({"planned_config_migration": plan}, ensure_ascii=False, indent=2))
+    """Explicit v2 -> v3 copy migration. Originals/old project links remain intact."""
+    project, home, root = existing_project_directory(args.project), expand(args.home), expand(args.root)
+    root_state.validate_root_location(root, home, project)
+    pointer = home / CONFIG_FILENAME
+    old = root_state.read_json(pointer)
+    root_state.exact(old, {"schema_version", "libraries", "active_library", "default_mode"}, "v2 用户配置")
+    if old["schema_version"] != 2 or not isinstance(old["libraries"], dict) or args.main_library not in old["libraries"]:
+        raise ValueError("migrate-config 仅迁移明确指定主库的 v2 用户配置；v1 需先人工审查")
+    if old["active_library"] not in old["libraries"] or old["default_mode"] not in VALID_DEFAULT_MODES:
+        raise ValueError("v2 活动库或默认模式无效")
+    if root.exists():
+        raise ValueError("迁移目标管理根必须不存在，避免覆盖已有数据")
+    catalog = root_state.new_catalog()
+    copies = []
+    sources = set()
+    for old_name, item in old["libraries"].items():
+        root_state.name(old_name)
+        root_state.exact(item, {"path"}, "v2 库记录")
+        source = resolve_from(item["path"], home, home)
+        root_state.plain_location(source)
+        if not source.is_dir() or source in sources or is_path_inside(root, source) or is_path_inside(source, root):
+            raise ValueError("旧库缺失、重复或与新管理根重叠")
+        if any(is_path_inside(source, prior) or is_path_inside(prior, source) for prior in sources):
+            raise ValueError("旧库之间不能嵌套")
+        sources.add(source)
+        if (source / LOCAL_RECORD_DIR).exists():
+            raise ValueError("旧库含本地接管恢复凭据；不能复制成失效凭据，须先单独处理接管记录")
+        library = "central" if old_name == args.main_library else old_name
+        if library == "central" and old_name != args.main_library:
+            raise ValueError("旧库名 central 与选定主库冲突；先明确重命名方案")
+        if library != "central":
+            catalog["libraries"][library] = {"path": f"libraries/{library}", "library_id": str(uuid.uuid4())}
+        registry = read_registry(source)
+        entries = {}
+        for record in registry["repositories"].values():
+            validate_registered_repository(source, record)
+            for skill, spec in record["skills"].items():
+                entries[skill] = (Path(record["path"]) / spec["subpath"]).as_posix()
+        manifest = migration_manifest(source, set(entries))
+        copies.append({"from": str(source), "to": str(root / "libraries" / library),
+                       "old_name": old_name, "name": library, "entries": entries,
+                       "manifest": manifest})
+    before = root_state.metadata_snapshot(pointer, old)
+    digest = manifest_digest({"config_sha256": hashlib.sha256(before).hexdigest(), "copies": copies})
+    backup = home / f".skill-linker-v2-{digest[:16]}.backup.json"
+    root_state.plain_location(backup)
+    if backup.exists():
+        raise ValueError("该配置迁移的备份已存在；先审查先前操作")
+    print(json.dumps({"root": str(root), "primary_library": "central", "expected_digest": digest,
+                      "copy_libraries": [{k: v for k, v in item.items() if k != "manifest"} for item in copies],
+                      "backup_config": str(backup), "original_libraries_preserved": True,
+                      "project_links_unchanged": True, "next": "逐项目 project-bind --replace-v2；旧链接另列切换计划"}, ensure_ascii=False, indent=2))
     if not args.execute:
-        print("当前只是 dry-run；用户确认后再传入 --execute 升级配置")
         return 0
-    if warning and not args.allow_global_central:
-        raise SystemExit("中央目录是 Agent 全局 skills 目录；明确确认后增加 --allow-global-central")
-    if namespace_warning(central) and not args.allow_non_namespaced_central:
-        raise SystemExit("中央目录缺少 .e8-skill-linker/AgentSkills 命名空间；明确确认后增加 --allow-non-namespaced-central")
-    central.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(migrated, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"migrated_config": str(target)}, ensure_ascii=False, indent=2))
+    if args.expected_digest != digest:
+        raise ValueError("必须提供已审查计划的 --expected-digest，内容变化需重新计划")
+    root.mkdir(parents=True)
+    (root / "libraries").mkdir()
+    # On copy failure the new root is deliberately retained for diagnosis; old data/pointer survive.
+    for item in copies:
+        source, target = Path(item["from"]), Path(item["to"])
+        excluded = set(item["entries"])
+        shutil.copytree(source, target, ignore=lambda directory, names: excluded if Path(directory) == source else [])
+        if migration_manifest(target, excluded) != item["manifest"] or migration_manifest(source, excluded) != item["manifest"]:
+            raise ValueError("库复制或原库内容校验失败；保留新副本供审查，用户指针未切换")
+        for skill, relative in item["entries"].items():
+            create_symlink(target / skill, target / relative, True, args.link_type, allowed_roots=[target])
+        root_state.atomic_bytes(target / root_state.MARKER, root_state.encode(root_state.library_marker(catalog, item["name"])))
+        for record in read_registry(target)["repositories"].values():
+            validate_registered_repository(target, record)
+    desired = {"schema_version": 3, "root": str(root), "root_id": catalog["root_id"]}
+    root_state.commit_metadata(root, {backup: old, root / root_state.CATALOG: catalog, pointer: desired},
+                              {backup: None, root / root_state.CATALOG: None, pointer: before})
+    print(json.dumps({"migrated_root": str(root), "originals_preserved": True}, ensure_ascii=False))
     return 0
 
 
-def library_list(args: argparse.Namespace) -> int:
-    project = expand(args.project)
-    home = expand(args.home)
-    report: dict[str, object] = {"effective": load_effective_config(project, home), "scopes": {}}
-    scopes = report["scopes"]
-    assert isinstance(scopes, dict)
-    for scope in ("project", "user"):
-        path = config_path_for_scope(project, home, scope)
-        data = read_config_file(path)
-        if data is None:
-            scopes[scope] = {"path": str(path), "exists": False}
-            continue
-        try:
-            scopes[scope] = normalize_config(path, scope, data, home)
-        except ValueError as exc:
-            scopes[scope] = {"path": str(path), "exists": True, "error": str(exc)}
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    return 0
-
-
-def library_add(args: argparse.Namespace) -> int:
-    project = expand(args.project)
-    home = expand(args.home)
-    path, _, normalized = load_scoped_config(project, home, args.scope)
-    name = command_library_name(args.name)
-    if name in normalized["libraries"]:
-        raise SystemExit(f"中央库名称已存在: {name}")
-    if args.central and args.central_base:
-        raise SystemExit("不能同时提供 --central 和 --central-base")
-    if not args.central and not args.central_base:
-        raise SystemExit("必须提供 --central 或 --central-base")
-    base = resolve_from(args.central_base, home, project) if args.central_base else None
-    central = central_from_base(base) if base else resolve_from(args.central, home, project)
-    libraries = {library_name: Path(item["path"]) for library_name, item in normalized["libraries"].items()}
-    if any(canonical(existing) == canonical(central) for existing in libraries.values()):
-        raise SystemExit(f"该中央库路径已登记: {central}")
-    libraries[name] = central
-    active = name if args.activate else normalized["active_library"]
-    data = config_data(libraries, active, normalized["default_mode"])
-    warning = global_dir_warning(central, home)
-    plan = {
-        "config_path": str(path),
-        "add_library": {"name": name, "path": str(central)},
-        "activate": args.activate,
-        "will_create_central_dir": not central.exists(),
-        "warnings": [item for item in (warning, None if base else namespace_warning(central)) if item],
-    }
-    print(json.dumps({"planned_library_add": plan}, ensure_ascii=False, indent=2))
-    if not args.execute:
-        print("当前只是 dry-run；用户确认后再传入 --execute 添加中央库")
-        return 0
-    if warning and not args.allow_global_central:
-        raise SystemExit("中央目录是 Agent 全局 skills 目录；明确确认后增加 --allow-global-central")
-    if namespace_warning(central) and not args.allow_non_namespaced_central:
-        raise SystemExit("中央目录缺少 .e8-skill-linker/AgentSkills 命名空间；明确确认后增加 --allow-non-namespaced-central")
-    central.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"added_library": plan}, ensure_ascii=False, indent=2))
-    return 0
-
-
-def library_use(args: argparse.Namespace) -> int:
-    project = existing_project_directory(args.project)
-    home = expand(args.home)
-    path, _, normalized = load_scoped_config(project, home, args.scope)
-    name = command_library_name(args.name)
-    if name not in normalized["libraries"]:
-        raise SystemExit(f"中央库不存在: {name}")
-    libraries = {library_name: Path(item["path"]) for library_name, item in normalized["libraries"].items()}
-    data = config_data(libraries, name, normalized["default_mode"])
-    plan = {
-        "config_path": str(path),
-        "from": normalized["active_library"],
-        "to": name,
-        "central_skills_dir": str(libraries[name]),
-        "existing_project_links": project_link_inventory(project, libraries),
-        "note": "只切换该配置作用域的活动中央库；不会静默重写现有项目链接。",
-    }
-    print(json.dumps({"planned_library_use": plan}, ensure_ascii=False, indent=2))
-    if not args.execute:
-        print("当前只是 dry-run；用户确认后再传入 --execute 切换活动中央库")
-        return 0
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"active_library": name, "config_path": str(path)}, ensure_ascii=False, indent=2))
-    return 0
+def add_management_commands(sub) -> None:
+    listing = sub.add_parser("project-list")
+    listing.add_argument("--home", default="~")
+    listing.add_argument("--project", default=".")
+    listing.set_defaults(func=project_list)
+    migration = sub.add_parser("migrate-config")
+    migration.add_argument("--project", default=".")
+    migration.add_argument("--home", default="~")
+    migration.add_argument("--root", required=True)
+    migration.add_argument("--main-library", required=True)
+    migration.add_argument("--expected-digest")
+    migration.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
+    migration.add_argument("--execute", action="store_true")
+    migration.set_defaults(func=migrate_config)
 
 
 def ensure_project_hub(project: Path, execute: bool) -> None:
+    root_state.plain_location(project / ".agents" / "skills")
     existing_project_directory(project)
     hub = project / ".agents" / "skills"
     if path_lexists(hub):
@@ -1248,8 +1126,15 @@ def install_repo(args: argparse.Namespace) -> int:
     central_entries = [(central / item["name"], repo_dest / item["subpath"]) for item in specs]
     project_hub = project / ".agents" / "skills"
     project_entries = [(project_hub / item["name"], central / item["name"]) for item in specs] if args.enable_project else []
+    if project_entries:
+        root_state.plain_location(project_hub)
     central_states = [validate_link_destination(entry, target) for entry, target in central_entries]
     project_states = [validate_link_destination(entry, target) for entry, target in project_entries]
+    binding_change = project_binding_change(project, home, {
+        item["name"]: library_name_for_path(project, home, central) for item in specs
+    }, []) if project_entries else None
+    registry_before = registry_path(central).read_bytes() if registry_path(central).exists() else None
+    registry_written = False
     plan = {
         "repository": {"id": repo_id, "url": repo_url, "destination": str(repo_dest)},
         "project": str(project),
@@ -1260,6 +1145,7 @@ def install_repo(args: argparse.Namespace) -> int:
         "project_entries": [{"path": str(entry), "target": str(target)} for entry, target in project_entries],
         "registry": str(registry_path(central)),
         "will_delete_existing_content": False,
+        "project_binding": str(project / CONFIG_FILENAME) if project_entries else None,
     }
     print(json.dumps({"planned_repo_install": plan}, ensure_ascii=False, indent=2))
     if not args.execute:
@@ -1318,7 +1204,15 @@ def install_repo(args: argparse.Namespace) -> int:
         })
         validate_registered_repository(central, registry["repositories"][repo_id])
         write_registry(central, registry)
-    except (OSError, SystemExit):
+        registry_written = True
+        if binding_change is not None:
+            save_project_binding(binding_change)
+    except (OSError, ValueError, SystemExit):
+        if registry_written:
+            if registry_before is None:
+                registry_path(central).unlink()
+            else:
+                root_state.atomic_bytes(registry_path(central), registry_before)
         for entry in reversed(created_project):
             remove_link_path(entry)
         for entry in reversed(created_central):
@@ -1511,6 +1405,8 @@ def prepare_link(
         if not source.is_dir() or not (source / "SKILL.md").is_file():
             raise SystemExit(f"中央入口失效: {source}")
         name = validate_skill_name(raw_name if raw_name is not None else source.name)
+    if source != central / name or read_skill_name(source) != name:
+        raise SystemExit("项目启用必须使用库根层的同名 skill 入口，不能把项目私有目录登记为中央来源")
     target = project / ".agents" / "skills" / name
     return {
         "project": str(project),
@@ -1523,6 +1419,7 @@ def prepare_link(
 def verify_project_entries(project: Path, entries: list[tuple[Path, Path]]) -> list[dict]:
     """Verify the named project, each immediate target and readable skill identity."""
     existing_project_directory(project)
+    root_state.plain_location(project / ".agents" / "skills")
     verified = []
     for entry, expected_target in entries:
         if entry.parent != project / ".agents" / "skills":
@@ -1545,22 +1442,7 @@ def link(args: argparse.Namespace) -> int:
     central = configured_central(project, home, args.library)
     project_hub = project / ".agents" / "skills"
     prepared = prepare_link(project, args.source, args.name, central, project_hub)
-    print(json.dumps({"planned_link": prepared}, ensure_ascii=False, indent=2))
-    validate_link_destination(Path(prepared["target_path"]), Path(prepared["source_path"]))
-    ensure_project_hub(project, args.execute)
-    create_symlink(
-        Path(prepared["target_path"]),
-        Path(prepared["source_path"]),
-        args.execute,
-        args.link_type,
-        allowed_roots=[central, project_hub],
-    )
-    if not args.execute:
-        print("当前只是 dry-run；用户确认后再传入 --execute 执行")
-    else:
-        verified = verify_project_entries(project, [(Path(prepared["target_path"]), Path(prepared["source_path"]))])
-        print(json.dumps({"verified_project_entries": verified}, ensure_ascii=False, indent=2))
-    return 0
+    return apply_project_links(project, home, central, [prepared], args.execute, args.link_type)
 
 
 def link_many(args: argparse.Namespace) -> int:
@@ -1575,26 +1457,35 @@ def link_many(args: argparse.Namespace) -> int:
     targets = [item["target_path"] for item in prepared]
     if len(set(targets)) != len(targets):
         raise SystemExit("批量链接中存在重复目标名称，已停止")
-    for item in prepared:
-        validate_link_destination(Path(item["target_path"]), Path(item["source_path"]))
+    return apply_project_links(project, home, central, prepared, args.execute, args.link_type)
+
+
+def apply_project_links(project: Path, home: Path, central: Path, prepared: list[dict], execute: bool, link_type: str) -> int:
+    entries = [(Path(item["target_path"]), Path(item["source_path"])) for item in prepared]
+    states = [validate_link_destination(entry, target) for entry, target in entries]
+    library = library_name_for_path(project, home, central)
+    change = project_binding_change(project, home, {item["name"]: library for item in prepared}, [])
     for item in prepared:
         print(json.dumps({"planned_link": item}, ensure_ascii=False, indent=2))
-    ensure_project_hub(project, args.execute)
-    for item in prepared:
-        create_symlink(
-            Path(item["target_path"]),
-            Path(item["source_path"]),
-            args.execute,
-            args.link_type,
-            allowed_roots=[central, project_hub],
-        )
-    if not args.execute:
+    print(json.dumps({"project_binding": str(change[1]), "enabled": change[2]["enabled"]}, ensure_ascii=False))
+    if not execute:
+        ensure_project_hub(project, False)
         print("当前只是 dry-run；用户确认后再传入 --execute 执行")
-    else:
-        verified = verify_project_entries(project, [
-            (Path(item["target_path"]), Path(item["source_path"])) for item in prepared
-        ])
-        print(json.dumps({"verified_project_entries": verified}, ensure_ascii=False, indent=2))
+        return 0
+    created = []
+    ensure_project_hub(project, True)
+    try:
+        for (entry, target), state in zip(entries, states):
+            create_symlink(entry, target, True, link_type, allowed_roots=[central])
+            if state == "absent":
+                created.append(entry)
+        verified = verify_project_entries(project, entries)
+        save_project_binding(change)
+    except (OSError, ValueError, SystemExit):
+        for entry in reversed(created):
+            remove_link_path(entry)
+        raise
+    print(json.dumps({"verified_project_entries": verified}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1626,6 +1517,9 @@ def check(args: argparse.Namespace) -> int:
         libraries = selected_libraries(project, home, args.library, args.all_libraries)
         groups.extend((f"central:{name}", central) for name, central in libraries.items())
     problems = []
+    if config["source"] is not None and config["binding"] is not None:
+        health = registered_project_report(Path(config["root"]), config["catalog"], config["binding"]["project_id"])
+        problems.extend(health["errors"])
     for name, central in libraries.items():
         try:
             registry = read_registry(central)
@@ -1684,6 +1578,18 @@ def remove_link_path(target: Path) -> None:
 
 def unlink(args: argparse.Namespace) -> int:
     target = expand_preserve_link(args.target)
+    root_state.plain_location(target.parent)
+    project, home = existing_project_directory(args.project), expand(args.home)
+    binding_change = None
+    if target.parent == project / ".agents" / "skills":
+        config = load_effective_config(project, home)
+        if config["source"] == "error":
+            raise SystemExit(config["error"])
+        if config["source"] is not None and config["binding"] is not None and target.name in config["binding"]["enabled"]:
+            expected = Path(config["libraries"][config["binding"]["enabled"][target.name]]["path"]) / target.name
+            if validate_link_destination(target, expected) != "same-link":
+                raise SystemExit("入口与登记不一致，先审查，不取消错误目标的登记")
+            binding_change = project_binding_change(project, home, {}, [target.name])
     item = classify(target)
     plan = {
         "target": item,
@@ -1699,7 +1605,15 @@ def unlink(args: argparse.Namespace) -> int:
     if not args.execute:
         print("当前只是 dry-run；用户确认后再传入 --execute 删除链接本身")
         return 0
+    old_target = immediate_link_target(target)
+    old_type = "junction" if is_junction(target) else "symlink"
     remove_link_path(target)
+    try:
+        if binding_change is not None:
+            save_project_binding(binding_change)
+    except (OSError, ValueError):
+        create_symlink(target, old_target, True, old_type)
+        raise
     print(json.dumps({"unlinked": str(target), "deleted_original": False}, ensure_ascii=False, indent=2))
     return 0
 
@@ -1709,7 +1623,7 @@ def migrate(args: argparse.Namespace) -> int:
     home = expand(args.home)
     source = expand(args.source)
     central = expand(args.central)
-    expected_central = configured_central(project, home)
+    expected_central = configured_central(project, home, args.library)
     if canonical(central) != canonical(expected_central):
         raise SystemExit(f"central 必须等于当前生效配置中的中央库: {expected_central}")
     scope = adoption_scope(source, project, home)
@@ -1738,6 +1652,9 @@ def migrate(args: argparse.Namespace) -> int:
     if path_lexists(backup) or path_lexists(record_path) or path_lexists(failure_copy):
         raise SystemExit("已存在接管记录或备份；先审查该次操作，不覆盖或重复接管")
     provenance = source_evidence(source, project, home)
+    binding_change = project_binding_change(project, home, {
+        name: library_name_for_path(project, home, central)
+    }, []) if source == project / ".agents" / "skills" / name else None
     record = {"schema_version": 1, "source": str(source), "target": str(target),
               "central": str(central), "name": name, "scope": scope,
               "digest": digest, "backup": str(backup), "project": str(project),
@@ -1780,6 +1697,8 @@ def migrate(args: argparse.Namespace) -> int:
         record["status"] = "adopted"
         write_adoption_record(record_path, record)
         write_adoption_record(backup / "receipt.json", record)
+        if binding_change is not None:
+            save_project_binding(binding_change)
     except (OSError, ValueError, SystemExit):
         # Restore the original. Keep failed copies for inspection rather than deleting data.
         if moved:
@@ -1878,6 +1797,15 @@ def restore_adoption(args: argparse.Namespace) -> int:
         raise SystemExit("备份内容已改变；拒绝自动恢复")
     if manifest_digest(plain_tree_manifest(target)) != record["digest"]:
         raise SystemExit("中央副本已改变；先审查修改，不用旧备份替换当前入口")
+    binding_change = project_binding_change(project, home, {}, [record["name"]]) if source == project / ".agents" / "skills" / record["name"] else None
+    # All fallible metadata reads must precede unlink/rename, including user-scope restore.
+    restored_record = {**record, "status": "restored"}
+    changes = {record_path: restored_record, receipt: restored_record}
+    before = {path: root_state.metadata_snapshot(path, record) for path in changes}
+    management_root, _ = root_state.read_user(home)
+    if binding_change is not None:
+        changes[binding_change[1]] = binding_change[2]
+        before[binding_change[1]] = binding_change[3]
     print(json.dumps({"restore_original": str(source), "backup": str(original),
                       "keep_central_copy": str(target), "preserved_scope": scope}, ensure_ascii=False, indent=2))
     if not args.execute:
@@ -1889,9 +1817,12 @@ def restore_adoption(args: argparse.Namespace) -> int:
     except OSError:
         create_symlink(source, target, True, args.link_type, allowed_roots=[central])
         raise
-    record["status"] = "restored"
-    write_adoption_record(record_path, record)
-    write_adoption_record(receipt, record)
+    try:
+        root_state.commit_metadata(management_root, changes, before)
+    except (OSError, ValueError):
+        source.rename(original)
+        create_symlink(source, target, True, args.link_type, allowed_roots=[central])
+        raise
     print(json.dumps({"restored": str(source), "central_copy_preserved": str(target)}, ensure_ascii=False))
     return 0
 
@@ -2071,7 +2002,8 @@ def updates(args: argparse.Namespace) -> int:
             except (SystemExit, subprocess.CalledProcessError) as exc:
                 errors.append({"library": name, "repository": repo_id, "error": str(exc)})
                 continue
-            report = {"library": name, "repository": repo_id, "central": str(central)}
+            report = {"library": name, "repository": repo_id, "central": str(central),
+                      "registered_project_impact": affected_projects(expand(args.home), name, record["skills"])}
             if args.execute:
                 result = run_git(repo, ["fetch", "--prune"])
                 if result.returncode != 0:
@@ -2116,9 +2048,11 @@ def update_repo(args: argparse.Namespace) -> int:
             raise SystemExit("--repo 不属于指定中央库的已登记仓库")
     if tracking is not None:
         validate_registered_repository(tracking["central"], tracking["record"])
+        tracked_library = library_name_for_path(expand(args.project), expand(args.home), tracking["central"])
     plan = {
         "repository": status,
         "registry_update": str(registry_path(tracking["central"])) if tracking is not None else None,
+        "registered_project_impact": affected_projects(expand(args.home), tracked_library, tracking["record"]["skills"]) if tracking is not None else None,
     }
     print(json.dumps({"planned_update": plan}, ensure_ascii=False, indent=2))
     if status["dirty"]:
@@ -2166,9 +2100,13 @@ def checkout(args: argparse.Namespace) -> int:
     if not status["is_git_repo"]:
         raise SystemExit(f"不是 git 仓库: {repo}")
     tracking = registry_tracking_for_repo(Path(status["path"]))
+    if tracking is not None:
+        validate_registered_repository(tracking["central"], tracking["record"])
+        tracked_library = library_name_for_path(expand(args.project), expand(args.home), tracking["central"])
     plan = {
         "repo": status,
         "checkout_ref": checkout_ref,
+        "registered_project_impact": affected_projects(expand(args.home), tracked_library, tracking["record"]["skills"]) if tracking is not None else None,
         "registry_update": str(registry_path(tracking["central"])) if tracking is not None else None,
     }
     print(json.dumps({"planned_checkout": plan}, ensure_ascii=False, indent=2))
@@ -2256,54 +2194,8 @@ def main() -> int:
     onboard_parser.add_argument("--home", default="~")
     onboard_parser.set_defaults(func=onboard)
 
-    config_parser = sub.add_parser("config")
-    config_parser.add_argument("--project", default=".")
-    config_parser.add_argument("--home", default="~")
-    config_parser.add_argument("--scope", choices=["project", "user"], default="user")
-    config_parser.add_argument("--central")
-    config_parser.add_argument("--central-base")
-    config_parser.add_argument("--library", default=DEFAULT_LIBRARY_NAME)
-    config_parser.add_argument("--mode", choices=sorted(VALID_DEFAULT_MODES), default="centralize")
-    config_parser.add_argument("--allow-global-central", action="store_true")
-    config_parser.add_argument("--allow-non-namespaced-central", action="store_true")
-    config_parser.add_argument("--execute", action="store_true")
-    config_parser.set_defaults(func=config)
-
-    migrate_config_parser = sub.add_parser("migrate-config")
-    migrate_config_parser.add_argument("--project", default=".")
-    migrate_config_parser.add_argument("--home", default="~")
-    migrate_config_parser.add_argument("--scope", choices=["project", "user"], default="user")
-    migrate_config_parser.add_argument("--library", default=DEFAULT_LIBRARY_NAME)
-    migrate_config_parser.add_argument("--allow-global-central", action="store_true")
-    migrate_config_parser.add_argument("--allow-non-namespaced-central", action="store_true")
-    migrate_config_parser.add_argument("--execute", action="store_true")
-    migrate_config_parser.set_defaults(func=migrate_config)
-
-    library_list_parser = sub.add_parser("library-list")
-    library_list_parser.add_argument("--project", default=".")
-    library_list_parser.add_argument("--home", default="~")
-    library_list_parser.set_defaults(func=library_list)
-
-    library_add_parser = sub.add_parser("library-add")
-    library_add_parser.add_argument("--project", default=".")
-    library_add_parser.add_argument("--home", default="~")
-    library_add_parser.add_argument("--scope", choices=["project", "user"], default="user")
-    library_add_parser.add_argument("--name", required=True)
-    library_add_parser.add_argument("--central")
-    library_add_parser.add_argument("--central-base")
-    library_add_parser.add_argument("--activate", action="store_true")
-    library_add_parser.add_argument("--allow-global-central", action="store_true")
-    library_add_parser.add_argument("--allow-non-namespaced-central", action="store_true")
-    library_add_parser.add_argument("--execute", action="store_true")
-    library_add_parser.set_defaults(func=library_add)
-
-    library_use_parser = sub.add_parser("library-use")
-    library_use_parser.add_argument("--project", default=".")
-    library_use_parser.add_argument("--home", default="~")
-    library_use_parser.add_argument("--scope", choices=["project", "user"], default="user")
-    library_use_parser.add_argument("--name", required=True)
-    library_use_parser.add_argument("--execute", action="store_true")
-    library_use_parser.set_defaults(func=library_use)
+    root_state.add_commands(sub)
+    add_management_commands(sub)
 
     install_self_parser = sub.add_parser("install-self")
     install_self_parser.add_argument("--source")
@@ -2352,6 +2244,8 @@ def main() -> int:
     check_parser.set_defaults(func=check)
 
     unlink_parser = sub.add_parser("unlink")
+    unlink_parser.add_argument("--project", default=".")
+    unlink_parser.add_argument("--home", default="~")
     unlink_parser.add_argument("--target", required=True)
     unlink_parser.add_argument("--execute", action="store_true")
     unlink_parser.set_defaults(func=unlink)
@@ -2378,6 +2272,8 @@ def main() -> int:
     update_parser.set_defaults(func=update_repo)
 
     checkout_parser = sub.add_parser("checkout")
+    checkout_parser.add_argument("--project", default=".")
+    checkout_parser.add_argument("--home", default="~")
     checkout_parser.add_argument("--repo", required=True)
     checkout_parser.add_argument("--ref", required=True)
     checkout_parser.add_argument("--allow-dirty", action="store_true")
@@ -2405,6 +2301,7 @@ def main() -> int:
     migrate_parser = sub.add_parser("migrate")
     migrate_parser.add_argument("--project", default=".")
     migrate_parser.add_argument("--home", default="~")
+    migrate_parser.add_argument("--library")
     migrate_parser.add_argument("--source", required=True)
     migrate_parser.add_argument("--central", required=True)
     migrate_parser.add_argument("--name")

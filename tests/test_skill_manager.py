@@ -9,12 +9,14 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import sys
 import unittest
 from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "skills" / "e8-skill-linker" / "scripts" / "skill_manager.py"
+sys.path.insert(0, str(SCRIPT_PATH.parent))
 SPEC = importlib.util.spec_from_file_location("skill_manager", SCRIPT_PATH)
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError(f"无法加载脚本: {SCRIPT_PATH}")
@@ -31,24 +33,27 @@ def write_skill(path: Path, name: str | None = None) -> None:
     )
 
 
-def write_config(
-    path: Path,
-    central: Path,
-    mode: str = "centralize",
-    library: str = "personal",
-) -> None:
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "libraries": {library: {"path": str(central)}},
-                "active_library": library,
-                "default_mode": mode,
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+def write_config(path: Path, central: Path, project: Path) -> None:
+    """Construct only schema v3 fixtures; source layouts use libraries/central."""
+    state = skill_manager.root_state
+    root = central.parent.parent
+    if central != root / "libraries" / "central":
+        raise ValueError("Fixture requires a v3 central path")
+    catalog = state.new_catalog()
+    catalog_path = root / state.CATALOG
+    if catalog_path.exists():
+        catalog = state.read_catalog(root)
+    central.mkdir(parents=True, exist_ok=True)
+    (central / state.MARKER).write_bytes(state.encode(state.library_marker(catalog, "central")))
+    catalog_path.write_bytes(state.encode(catalog))
+    path.write_bytes(state.encode({"schema_version": 3, "root": str(root), "root_id": catalog["root_id"]}))
+    bind_project(path.parent, project)
+
+
+def bind_project(home: Path, project: Path) -> None:
+    with contextlib.redirect_stdout(io.StringIO()):
+        skill_manager.root_state.project_bind(argparse.Namespace(
+            home=str(home), project=str(project), library="central", replace_v2=False, execute=True))
 
 
 def write_v1_config(path: Path, central: Path, mode: str = "centralize") -> None:
@@ -74,10 +79,10 @@ def init_git_repo(path: Path) -> None:
 class SkillManagerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.home = self.root / "home"
         self.project = self.root / "project"
-        self.central = self.home / ".e8-skill-linker" / "AgentSkills"
+        self.central = self.home / ".e8-skill-linker" / "libraries" / "central"
         self.home.mkdir()
         self.project.mkdir()
         self.central.mkdir(parents=True)
@@ -85,158 +90,14 @@ class SkillManagerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def test_project_config_overrides_user_config(self) -> None:
-        user_central = self.central
-        project_central = self.root / "project-central"
-        project_central.mkdir()
-        write_config(self.home / ".skill-linker.json", user_central)
-        write_config(self.project / ".skill-linker.json", project_central, "ask")
-
-        config = skill_manager.load_effective_config(self.project, self.home)
-
-        self.assertEqual(config["source"], "project")
-        self.assertEqual(config["central_skills_dir"], str(project_central))
-        self.assertEqual(config["active_library"], "personal")
-        self.assertEqual(config["default_mode"], "ask")
-
-    def test_config_rejects_missing_and_unknown_fields(self) -> None:
-        config_path = self.project / ".skill-linker.json"
-
-        with self.assertRaisesRegex(ValueError, "缺少必需字段"):
-            skill_manager.normalize_config(
-                config_path,
-                "project",
-                {"schema_version": 2},
-                self.home,
-            )
-        with self.assertRaisesRegex(ValueError, "未知字段"):
-            skill_manager.normalize_config(
-                config_path,
-                "project",
-                {
-                    "schema_version": 2,
-                    "libraries": {"personal": {"path": str(self.central)}},
-                    "active_library": "personal",
-                    "default_mode": "centralize",
-                    "extra": True,
-                },
-                self.home,
-            )
-
     def test_v1_config_requires_explicit_migration(self) -> None:
-        config_path = self.home / ".skill-linker.json"
-        write_v1_config(config_path, self.central)
-
+        write_v1_config(self.home / ".skill-linker.json", self.central)
         config = skill_manager.load_effective_config(self.project, self.home)
-
         self.assertEqual(config["source"], "error")
         self.assertIn("migrate-config", config["error"])
 
-    def test_migrate_config_converts_v1_to_named_library(self) -> None:
-        config_path = self.home / ".skill-linker.json"
-        write_v1_config(config_path, self.central)
-        args = argparse.Namespace(
-            project=str(self.project),
-            home=str(self.home),
-            scope="user",
-            library="personal",
-            allow_global_central=False,
-            allow_non_namespaced_central=False,
-            execute=True,
-        )
-
-        with contextlib.redirect_stdout(io.StringIO()):
-            result = skill_manager.migrate_config(args)
-
-        saved = json.loads(config_path.read_text(encoding="utf-8"))
-        self.assertEqual(result, 0)
-        self.assertEqual(saved["schema_version"], 2)
-        self.assertEqual(saved["active_library"], "personal")
-        self.assertEqual(saved["libraries"]["personal"]["path"], str(self.central))
-
-    def test_library_add_and_use_manage_one_active_library(self) -> None:
-        config_path = self.home / ".skill-linker.json"
-        write_config(config_path, self.central)
-        work_base = self.root / "work"
-        work_central = work_base / ".e8-skill-linker" / "AgentSkills"
-        add_args = argparse.Namespace(
-            project=str(self.project),
-            home=str(self.home),
-            scope="user",
-            name="work",
-            central=None,
-            central_base=str(work_base),
-            activate=False,
-            allow_global_central=False,
-            allow_non_namespaced_central=False,
-            execute=True,
-        )
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(skill_manager.library_add(add_args), 0)
-
-        use_args = argparse.Namespace(
-            project=str(self.project),
-            home=str(self.home),
-            scope="user",
-            name="work",
-            execute=True,
-        )
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(skill_manager.library_use(use_args), 0)
-
-        config = skill_manager.load_effective_config(self.project, self.home)
-        self.assertEqual(config["active_library"], "work")
-        self.assertEqual(config["central_skills_dir"], str(work_central))
-        self.assertEqual(set(config["libraries"]), {"personal", "work"})
-
-    def test_custom_base_derives_namespaced_central_directory(self) -> None:
-        custom_base = self.root / "external-drive"
-        args = argparse.Namespace(
-            project=str(self.project),
-            home=str(self.home),
-            central=None,
-            central_base=str(custom_base),
-            library="personal",
-            scope="user",
-            mode="centralize",
-            allow_global_central=False,
-            allow_non_namespaced_central=False,
-            execute=True,
-        )
-
-        with contextlib.redirect_stdout(io.StringIO()):
-            result = skill_manager.config(args)
-
-        self.assertEqual(result, 0)
-        expected = custom_base / ".e8-skill-linker" / "AgentSkills"
-        self.assertTrue(expected.is_dir())
-        saved = json.loads((self.home / ".skill-linker.json").read_text(encoding="utf-8"))
-        self.assertEqual(saved["schema_version"], 2)
-        self.assertEqual(saved["libraries"]["personal"]["path"], str(expected))
-        self.assertEqual(saved["active_library"], "personal")
-
-    def test_config_dry_run_does_not_write(self) -> None:
-        args = argparse.Namespace(
-            project=str(self.project),
-            home=str(self.home),
-            central=str(self.central),
-            central_base=None,
-            library="personal",
-            scope="user",
-            mode="centralize",
-            allow_global_central=False,
-            allow_non_namespaced_central=False,
-            execute=False,
-        )
-
-        with contextlib.redirect_stdout(io.StringIO()):
-            result = skill_manager.config(args)
-
-        self.assertEqual(result, 0)
-        self.assertFalse((self.home / ".skill-linker.json").exists())
-
     def test_link_rejects_source_outside_authorized_roots(self) -> None:
-        write_config(self.home / ".skill-linker.json", self.central)
+        write_config(self.home / ".skill-linker.json", self.central, self.project)
         outside = self.root / "download" / "unsafe-skill"
         write_skill(outside)
         args = argparse.Namespace(
@@ -252,54 +113,8 @@ class SkillManagerTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "必须位于已配置中央"):
             skill_manager.link(args)
 
-    def test_config_requires_explicit_confirmation_for_global_central(self) -> None:
-        global_central = self.home / ".agents" / "skills"
-        args = argparse.Namespace(
-            project=str(self.project),
-            home=str(self.home),
-            central=str(global_central),
-            central_base=None,
-            library="personal",
-            scope="user",
-            mode="centralize",
-            allow_global_central=False,
-            allow_non_namespaced_central=True,
-            execute=True,
-        )
-
-        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(
-            SystemExit, "--allow-global-central"
-        ):
-            skill_manager.config(args)
-
-        self.assertFalse(global_central.exists())
-        self.assertFalse((self.home / ".skill-linker.json").exists())
-
-    def test_config_requires_explicit_confirmation_for_non_namespaced_central(self) -> None:
-        custom_central = self.root / "external-drive" / "AgentSkills"
-        args = argparse.Namespace(
-            project=str(self.project),
-            home=str(self.home),
-            central=str(custom_central),
-            central_base=None,
-            library="personal",
-            scope="user",
-            mode="centralize",
-            allow_global_central=False,
-            allow_non_namespaced_central=False,
-            execute=True,
-        )
-
-        with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(
-            SystemExit, "--allow-non-namespaced-central"
-        ):
-            skill_manager.config(args)
-
-        self.assertFalse(custom_central.exists())
-        self.assertFalse((self.home / ".skill-linker.json").exists())
-
     def test_link_many_preflights_all_sources_before_writing(self) -> None:
-        write_config(self.home / ".skill-linker.json", self.central)
+        write_config(self.home / ".skill-linker.json", self.central, self.project)
         valid = self.central / "valid"
         invalid = self.central / "invalid"
         write_skill(valid)
@@ -355,7 +170,7 @@ class SkillManagerTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "Windows CI may not grant symlink permission")
     def test_link_and_unlink_preserve_central_source(self) -> None:
-        write_config(self.home / ".skill-linker.json", self.central)
+        write_config(self.home / ".skill-linker.json", self.central, self.project)
         source = self.central / "writer"
         write_skill(source)
         link_args = argparse.Namespace(
@@ -373,7 +188,7 @@ class SkillManagerTests(unittest.TestCase):
         self.assertTrue(target.is_symlink())
         self.assertEqual(target.resolve(), source.resolve())
 
-        unlink_args = argparse.Namespace(target=str(target), execute=True)
+        unlink_args = argparse.Namespace(target=str(target), project=str(self.project), home=str(self.home), execute=True)
         with contextlib.redirect_stdout(io.StringIO()):
             skill_manager.unlink(unlink_args)
         self.assertFalse(os.path.lexists(target))
@@ -381,7 +196,7 @@ class SkillManagerTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "Windows CI may not grant symlink permission")
     def test_migrate_moves_source_and_leaves_link(self) -> None:
-        write_config(self.home / ".skill-linker.json", self.central)
+        write_config(self.home / ".skill-linker.json", self.central, self.project)
         source = self.project / ".agents" / "skills" / "local-skill"
         write_skill(source)
         args = argparse.Namespace(
@@ -393,6 +208,7 @@ class SkillManagerTests(unittest.TestCase):
             link_type="auto",
             expected_digest=skill_manager.manifest_digest(skill_manager.plain_tree_manifest(source)),
             dependencies_reviewed=True,
+            library=None,
             execute=True,
         )
 
@@ -406,7 +222,7 @@ class SkillManagerTests(unittest.TestCase):
         self.assertTrue((target / "SKILL.md").is_file())
 
     def test_migrate_rolls_back_when_link_creation_fails(self) -> None:
-        write_config(self.home / ".skill-linker.json", self.central)
+        write_config(self.home / ".skill-linker.json", self.central, self.project)
         source = self.project / ".agents" / "skills" / "local-skill"
         write_skill(source)
         args = argparse.Namespace(
@@ -418,6 +234,7 @@ class SkillManagerTests(unittest.TestCase):
             link_type="auto",
             expected_digest=skill_manager.manifest_digest(skill_manager.plain_tree_manifest(source)),
             dependencies_reviewed=True,
+            library=None,
             execute=True,
         )
 
@@ -652,7 +469,7 @@ class SkillManagerTests(unittest.TestCase):
         (source / "README.md").write_text("second\n", encoding="utf-8")
         subprocess.run(["git", "commit", "-am", "second"], cwd=source, check=True, capture_output=True, text=True)
         latest_revision = skill_manager.git_output(source, ["rev-parse", "HEAD"])
-        write_config(self.home / ".skill-linker.json", self.central)
+        write_config(self.home / ".skill-linker.json", self.central, self.project)
         args = argparse.Namespace(
             project=str(self.project),
             home=str(self.home),
@@ -681,6 +498,8 @@ class SkillManagerTests(unittest.TestCase):
         installed_repo = self.central / record["path"]
         checkout_args = argparse.Namespace(
             repo=str(installed_repo),
+            project=str(self.project),
+            home=str(self.home),
             ref=skill_revision,
             allow_dirty=False,
             execute=True,
@@ -697,7 +516,7 @@ class SkillManagerTests(unittest.TestCase):
         write_skill(source / "skills" / "demo", "other")
         subprocess.run(["git", "add", "skills/demo/SKILL.md"], cwd=source, check=True)
         subprocess.run(["git", "commit", "-m", "add bad demo"], cwd=source, check=True, capture_output=True, text=True)
-        write_config(self.home / ".skill-linker.json", self.central)
+        write_config(self.home / ".skill-linker.json", self.central, self.project)
         args = argparse.Namespace(
             project=str(self.project),
             home=str(self.home),

@@ -13,19 +13,19 @@ import tempfile
 import unittest
 from unittest import mock
 
-from test_skill_manager import init_git_repo, skill_manager, write_config, write_skill
+from test_skill_manager import bind_project, init_git_repo, skill_manager, write_config, write_skill
 
 
 class RepositoryWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.home = self.root / "home"
         self.project = self.root / "project"
-        self.central = self.home / ".e8-skill-linker" / "AgentSkills"
+        self.central = self.home / ".e8-skill-linker" / "libraries" / "central"
         self.central.mkdir(parents=True)
         self.project.mkdir()
-        write_config(self.home / ".skill-linker.json", self.central)
+        write_config(self.home / ".skill-linker.json", self.central, self.project)
         self.source = self.root / "source-pack"
         init_git_repo(self.source)
         write_skill(self.source / "skills" / "demo")
@@ -53,7 +53,7 @@ class RepositoryWorkflowTests(unittest.TestCase):
             result = skill_manager.main()
         return result, output.getvalue()
 
-    def install(self, specs: str = "demo=skills/demo", library: str = "personal") -> Path:
+    def install(self, specs: str = "demo=skills/demo", library: str = "central") -> Path:
         self.cli("install-repo", "--repo-url", str(self.source), "--skills", specs,
                  "--library", library, "--link-type", self.link_type, "--execute")
         central = skill_manager.configured_central(self.project, self.home, library)
@@ -61,12 +61,13 @@ class RepositoryWorkflowTests(unittest.TestCase):
         return central / record["path"]
 
     def add_work(self) -> Path:
-        self.cli("library-add", "--scope", "user", "--name", "work", "--central-base", str(self.root / "work"), "--execute")
-        return self.root / "work" / ".e8-skill-linker" / "AgentSkills"
+        self.cli("library-add", "--name", "work", "--execute")
+        return self.central.parent / "work"
 
     def test_project_link_preserves_central_entry_after_retarget(self) -> None:
         self.project = self.root / "含空格 项目"
         self.project.mkdir()
+        bind_project(self.home, self.project)
         repo = self.install()
         self.cli("link", "--source", str(repo / "skills" / "demo"), "--link-type", self.link_type, "--execute")
         project_entry = self.project / ".agents" / "skills" / "demo"
@@ -111,6 +112,36 @@ class RepositoryWorkflowTests(unittest.TestCase):
         self.assertTrue((self.central / "demo" / "SKILL.md").is_file())
         self.assertFalse(os.path.lexists(self.central / "reviewer"))
         self.assertEqual(skill_manager.registry_path(self.central).read_bytes(), registry_before)
+
+    def test_binding_write_failure_restores_registry_and_existing_repository(self) -> None:
+        repo = self.install()
+        registry_before = skill_manager.registry_path(self.central).read_bytes()
+        binding_path = self.project / ".skill-linker.json"
+        binding_before = binding_path.read_bytes()
+        with mock.patch.object(skill_manager, "save_project_binding", side_effect=OSError("binding write failed")):
+            with self.assertRaisesRegex(OSError, "binding write failed"):
+                self.cli("install-repo", "--repo-url", str(self.source),
+                         "--skills", "demo=skills/demo,reviewer=skills/reviewer", "--enable-project",
+                         "--link-type", self.link_type, "--execute")
+        self.assertEqual(skill_manager.registry_path(self.central).read_bytes(), registry_before)
+        self.assertEqual(binding_path.read_bytes(), binding_before)
+        self.assertTrue((repo / ".git").is_dir())
+        self.assertTrue((self.central / "demo" / "SKILL.md").is_file())
+        self.assertFalse(os.path.lexists(self.central / "reviewer"))
+        for name in ("demo", "reviewer"):
+            self.assertFalse(os.path.lexists(self.project / ".agents" / "skills" / name))
+
+    def test_update_impact_lists_registered_project_origins(self) -> None:
+        self.install()
+        self.cli("link", "--source", str(self.central / "demo"), "--link-type", self.link_type, "--execute")
+        _, output = self.cli("updates")
+        impact = json.loads(output)["repositories"][0]["registered_project_impact"]
+        self.assertEqual(impact["scope"], "registered-projects-only")
+        self.assertEqual(impact["inspection_errors"], [])
+        self.assertEqual(impact["affected"], [{"project": str(self.project), "declared_skills": ["demo"], "unrecorded_links": []}])
+        self.cli("unlink", "--target", str(self.project / ".agents" / "skills" / "demo"), "--execute")
+        _, output = self.cli("updates")
+        self.assertEqual(json.loads(output)["repositories"][0]["registered_project_impact"]["affected"], [])
 
     def test_root_skill_name_may_differ_from_repository_name(self) -> None:
         (self.source / "SKILL.md").write_text("---\nname: root-writer\ndescription: test\n---\n", encoding="utf-8")
@@ -174,7 +205,7 @@ class RepositoryWorkflowTests(unittest.TestCase):
         self.assertEqual(report["behind"], 1)
         self.assertEqual(report["impact"]["directly_changed_skills"], ["demo"])
         self.assertIn("skills/new-skill/SKILL.md", report["impact"]["added_skill_files"])
-        self.cli("update", "--repo", str(repo), "--library", "personal", "--execute")
+        self.cli("update", "--repo", str(repo), "--library", "central", "--execute")
         record = next(iter(skill_manager.read_registry(self.central)["repositories"].values()))
         self.assertEqual(record["revision"], self.git(repo, "rev-parse", "HEAD"))
         self.assertEqual((self.central / "demo" / "guide.txt").read_text(encoding="utf-8"), "新版本")
@@ -232,29 +263,29 @@ class RepositoryWorkflowTests(unittest.TestCase):
             self.cli("update", "--repo", str(personal_repo), "--library", "work", "--execute")
         code, output = self.cli("updates", "--all-libraries", "--execute")
         self.assertEqual(code, 0)
-        self.assertEqual({row["library"] for row in json.loads(output)["repositories"]}, {"personal", "work"})
+        self.assertEqual({row["library"] for row in json.loads(output)["repositories"]}, {"central", "work"})
         code, output = self.cli("check", "--all-libraries")
         self.assertEqual(code, 0, output)
 
-    def test_project_config_does_not_fall_back_to_user_named_libraries(self) -> None:
+    def test_project_binding_keeps_user_library_catalog_visible(self) -> None:
         self.add_work()
-        write_config(self.project / ".skill-linker.json", self.central)
-        with self.assertRaisesRegex(SystemExit, "不存在中央库"):
-            self.cli("updates", "--library", "work")
+        code, output = self.cli("updates", "--library", "work")
+        self.assertEqual(code, 0)
+        self.assertEqual(set(skill_manager.load_effective_config(self.project, self.home)["libraries"]), {"central", "work"})
 
     def test_switch_reports_existing_project_ownership_without_relinking(self) -> None:
         self.add_work()
         self.install()
         self.cli("link", "--source", str(self.central / "demo"), "--link-type", self.link_type, "--execute")
-        _, output = self.cli("library-use", "--scope", "user", "--name", "work", "--execute")
+        _, output = self.cli("library-use", "--name", "work", "--execute")
         plan, _ = json.JSONDecoder().raw_decode(output)
-        self.assertEqual(plan["planned_library_use"]["existing_project_links"][0]["libraries"], ["personal"])
+        self.assertEqual(plan["enabled_unchanged"], {"demo": "central"})
         self.assertEqual(skill_manager.immediate_link_target(self.project / ".agents" / "skills" / "demo"), self.central / "demo")
 
     def test_check_fails_when_registered_skill_or_commit_is_missing(self) -> None:
         repo = self.install()
         (repo / "skills" / "demo" / "SKILL.md").unlink()
-        code, output = self.cli("check", "--library", "personal")
+        code, output = self.cli("check", "--library", "central")
         self.assertEqual(code, 1)
         self.assertTrue(json.loads(output)["problems"])
 
@@ -341,7 +372,6 @@ class RepositoryWorkflowTests(unittest.TestCase):
             ("install-repo", ["--repo-url", str(self.source), "--skills", "demo=skills/demo", "--enable-project"]),
             ("link", ["--source", str(self.central / "local-skill")]),
             ("link-many", ["--sources", str(self.central / "local-skill")]),
-            ("config", ["--scope", "project", "--central", str(self.central)]),
             ("migrate", ["--source", str(self.project / "unused"), "--central", str(self.central)]),
         ]
         for command, arguments in commands:
@@ -375,6 +405,7 @@ class RepositoryWorkflowTests(unittest.TestCase):
     def test_current_directory_preserves_unicode_project_path_and_reports_landing(self) -> None:
         actual = self.root / "Xhanzo‘s_WorkSpace" / "含空格 项目"
         actual.mkdir(parents=True)
+        bind_project(self.home, actual)
         lookalike = self.root / "Xhanzo's_WorkSpace" / "含空格 项目"
         write_skill(self.central / "local-skill")
         result = subprocess.run(

@@ -5,7 +5,8 @@
 第三方 Git 来源必须保留完整仓库，不默认抽取或复制单个 skill 子目录。中央库使用两层布局：
 
 ```text
-AgentSkills/
+<root>/libraries/<name>/
+├── .skill-linker-library.json       # 与根登记表匹配的库身份
 ├── .repos/
 │   └── github.com/owner/repository/   # 完整 Git 仓库
 ├── skill-a -> .repos/.../skills/skill-a
@@ -35,7 +36,7 @@ writer=skills/writer,reviewer=.agents/skills/reviewer
 
 安装计划必须同时列出：
 
-- 当前活动中央库；
+- 管理根、选定库和项目默认库；
 - 完整仓库的 `.repos/<host>/<owner>/<repo>` 目标；
 - 每个中央 skill 入口及目标；
 - 如果用户要立即使用，列出当前项目入口；
@@ -48,13 +49,13 @@ writer=skills/writer,reviewer=.agents/skills/reviewer
 
 上述重复执行能力不是自动写入许可。若只差项目入口，先列启用计划等确认；若请求目标已全部满足，只交付零变更核对单，不重跑 `install-repo --execute`。skill 文件与入口安装不包含第三方依赖、构建、账号连接或初始化，这些需求单独报告和授权。
 
-同一库内同名 skill 冲突，不同库可以独立保存同名 skill。用 `--library <name>` 单次选库，省略时使用活动库，不修改默认选择。
+同一库内同名 skill 冲突，不同库可以独立保存同名 skill。用 `--library <name>` 单次选库，省略时使用项目默认库（未绑定项目仅中央收藏时使用 central），不修改默认选择。
 
 如果无法在写入前确定远程 skill 路径，停止并说明需要先预览或用户指定；不在安装时猜测路径。用户明确要不可更新的快照时，可单独讨论 vendor/copy 模式，但它不是默认安装策略。
 
 ## 更新检查
 
-`updates --library work` 检查指定库；省略时检查活动库。`--all-libraries` 检查生效配置内全部库。只处理清单登记的仓库，不再扫描旧式根层 Git 仓库，也不自动登记未知目录。
+`updates --library work` 检查指定库；省略时检查项目默认库；未绑定时检查 central。`--all-libraries` 检查管理根内全部已登记库。只处理清单登记的仓库，不再扫描旧式根层 Git 仓库，也不自动登记未知目录。
 
 默认只读取本地 remote-tracking 状态。如果需要最新远程信息，先说明将运行 `git fetch --prune`，获得用户确认后再传入 `--execute`。当前没有后台自动检查。
 
@@ -79,6 +80,8 @@ writer=skills/writer,reviewer=.agents/skills/reviewer
 3. 从 Git 对象检查候选 `SKILL.md` 是否存在、为普通文件、frontmatter 名称是否一致。失败时保留工作区和清单，先讨论入口迁移。
 4. 用 `git merge --ff-only <候选SHA>` 应用已检查的提交，不进行第二次网络拉取。
 5. 再次验证 skill 与中央入口，成功后记录新 revision。
+
+更新和 checkout 前展示 registered_project_impact：从已登记项目的 enabled 和可访问的实际 hub 链接识别引用。失联/损坏项目单列检查错误；不扫描全盘，不覆盖未登记项目或用户级旧入口，不能宣称影响清单完整。
 
 已有项目链接会立即读取新版。上游新增 skill 不自动创建入口。fetch 会更新本地远端跟踪记录，即使后续验证拒绝更新也保留这些记录。应用后的验证或清单写入如失败，报告实际状态，不声称已回滚 Git 工作区，也不自动 reset 用户文件。
 

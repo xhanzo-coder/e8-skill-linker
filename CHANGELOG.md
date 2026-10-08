@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Schema v3 — one management root (breaking)
+
+- Fix the primary library name to `central`; keep all user-named libraries under `<root>/libraries/<name>`.
+- Replace project-over-user catalogs with a user root pointer, an identity-checked root catalog, per-library identity markers and project bindings with explicit enabled origins.
+- Add `root-init`, `root-connect`, `project-bind`, `project-rebind` and `project-list`. Make `config` read-only; remove configuration scope/path override flags. `library-use` changes only the current project's default.
+- Require binding before project enablement; synchronize managed hub links with enabled origins. Report registered-project impact before managed repository updates and checkouts.
+- Reject offline roots, mismatched identities, missing defaults, stale metadata and redirected project hubs instead of selecting another library. Add cooperative metadata locking and ordinary-failure rollback.
+- Replace `migrate-config` with digest-checked v2 copy migration into a new root. Preserve old libraries and project links; project rebinding and link replacement remain explicit. v1, local adoption receipts, nested links and oversized copies require separate review.
+- Keep the strict plan → end turn → user confirmation boundary. Root creation never adopts existing skills automatically.
+
 ### First-use onboarding
 
 - Add read-only `onboard` inventories with descriptions, visibility scopes, bounded content comparisons, local provenance evidence and explicit unknown/invalid states.

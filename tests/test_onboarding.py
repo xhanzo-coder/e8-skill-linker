@@ -17,12 +17,12 @@ from test_skill_manager import skill_manager as manager, write_config, write_ski
 class OnboardingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.home = self.root / "home"
         self.project = self.root / "含空格 项目"
-        self.central = self.root / "central"
+        self.central = self.home / ".e8-skill-linker" / "libraries" / "central"
         for path in (self.home, self.project, self.central):
-            path.mkdir()
+            path.mkdir(parents=True, exist_ok=True)
         self.link_type = "junction" if os.name == "nt" else "symlink"
 
     def tearDown(self) -> None:
@@ -43,7 +43,7 @@ class OnboardingTests(unittest.TestCase):
         return path
 
     def configure(self) -> None:
-        write_config(self.home / ".skill-linker.json", self.central)
+        write_config(self.home / ".skill-linker.json", self.central, self.project)
 
     def migration_args(self, source: Path) -> list[str]:
         return ["migrate", "--project", str(self.project), "--home", str(self.home),
@@ -168,7 +168,7 @@ class OnboardingTests(unittest.TestCase):
         plan, _ = json.JSONDecoder().raw_decode(output)
         self.assertEqual(plan["preserved_scope"], "project")
         self.assertFalse(Path(plan["receipt"]).exists())
-        self.assertEqual(list(self.central.iterdir()), [])
+        self.assertEqual([p for p in self.central.iterdir() if p.name != manager.root_state.MARKER], [])
         self.assertFalse(source.is_symlink() or manager.is_junction(source))
 
     def test_content_change_after_plan_is_rejected_before_writes(self) -> None:
@@ -179,7 +179,7 @@ class OnboardingTests(unittest.TestCase):
         (source / "script.txt").write_text("changed", encoding="utf-8")
         with self.assertRaisesRegex(SystemExit, "expected-digest"):
             self.cli(*self.migration_args(source), "--expected-digest", plan["expected_digest"], "--dependencies-reviewed", "--execute")
-        self.assertEqual(list(self.central.iterdir()), [])
+        self.assertEqual([p for p in self.central.iterdir() if p.name != manager.root_state.MARKER], [])
 
     def test_execute_requires_digest_and_dependency_review(self) -> None:
         self.configure()
@@ -188,7 +188,7 @@ class OnboardingTests(unittest.TestCase):
         for flags in ([], ["--expected-digest", digest], ["--dependencies-reviewed"]):
             with self.subTest(flags=flags), self.assertRaisesRegex(SystemExit, "expected-digest"):
                 self.cli(*self.migration_args(source), *flags, "--execute")
-        self.assertEqual(list(self.central.iterdir()), [])
+        self.assertEqual([p for p in self.central.iterdir() if p.name != manager.root_state.MARKER], [])
         self.assertFalse((self.project / ".skill-linker-backups").exists())
 
     def test_initialization_then_selected_adoption_leaves_other_skills_untouched(self) -> None:
@@ -202,16 +202,16 @@ class OnboardingTests(unittest.TestCase):
         self.assertEqual(report["central_libraries"], [])
         self.assertEqual(report["same_name_groups"][0]["relation"], "different-content")
 
-        self.central = manager.default_central_dir(self.home)
-        config_args = ["config", "--project", str(self.project), "--home", str(self.home),
-                       "--scope", "user", "--library", "personal", "--central", str(self.central)]
+        self.central = self.home / "new-management" / "libraries" / "central"
+        config_args = ["root-init", "--project", str(self.project), "--home", str(self.home),
+                       "--root", str(self.central.parent.parent)]
         self.cli(*config_args)
         self.assertFalse(self.central.exists())
         self.assertFalse((self.home / ".skill-linker.json").exists())
         self.cli(*config_args, "--execute")
         self.assertEqual(manager.plain_tree_manifest(user_source), user_before)
         self.assertEqual(manager.plain_tree_manifest(project_source), project_before)
-        self.assertEqual(list(self.central.iterdir()), [])
+        self.assertEqual([p for p in self.central.iterdir() if p.name != manager.root_state.MARKER], [])
 
         plan = self.adopt(user_source)
         self.assertEqual(plan["preserved_scope"], "user")
@@ -291,14 +291,12 @@ class OnboardingTests(unittest.TestCase):
         receipt = next((self.project / ".skill-linker-backups").rglob("receipt.json"))
         self.assertEqual(json.loads(receipt.read_text(encoding="utf-8"))["status"], "failed-original-preserved")
 
-    def test_global_central_is_rejected_before_scope_can_expand(self) -> None:
-        self.central = self.home / ".codex" / "skills"
-        self.central.mkdir(parents=True)
-        self.configure()
-        source = self.source()
-        with self.assertRaisesRegex(SystemExit, "原可见范围"):
-            self.cli(*self.migration_args(source))
-        self.assertEqual(list(self.central.iterdir()), [])
+    def test_global_root_is_rejected_before_scope_can_expand(self) -> None:
+        global_root = self.home / ".codex" / "skills" / "managed"
+        with self.assertRaisesRegex(ValueError, "Agent 发现目录"):
+            self.cli("root-init", "--project", str(self.project), "--home", str(self.home),
+                     "--root", str(global_root), "--execute")
+        self.assertFalse(global_root.exists())
 
     def test_bom_skill_is_consistent_across_inventory_adoption_and_restore(self) -> None:
         self.configure()
@@ -331,6 +329,31 @@ class OnboardingTests(unittest.TestCase):
         self.assertFalse(source.is_symlink() or manager.is_junction(source))
         self.assertEqual(manager.plain_tree_manifest(source), before)
         self.assertEqual(manager.plain_tree_manifest(self.central / "demo"), before)
+
+    def test_restore_metadata_read_failure_keeps_adoption_intact(self) -> None:
+        self.configure()
+        source = self.source(scope="user")
+        plan = self.adopt(source)
+        receipt = Path(plan["receipt"])
+        before = receipt.read_bytes()
+        real_read_user = manager.root_state.read_user
+        calls = 0
+
+        def fail_restore_read(home: Path):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("root metadata unavailable")
+            return real_read_user(home)
+
+        with mock.patch.object(manager.root_state, "read_user", side_effect=fail_restore_read):
+            with self.assertRaisesRegex(OSError, "root metadata unavailable"):
+                self.cli(*self.restore_args(plan), "--execute")
+        self.assertTrue(source.is_symlink() or manager.is_junction(source))
+        self.assertEqual(manager.immediate_link_target(source), self.central / "demo")
+        self.assertTrue((receipt.parent / "original" / "SKILL.md").is_file())
+        self.assertEqual(receipt.read_bytes(), before)
+        self.assertEqual((self.central / manager.LOCAL_RECORD_DIR / "demo.json").read_bytes(), before)
 
     def test_restore_refuses_changed_central_content(self) -> None:
         self.configure()
