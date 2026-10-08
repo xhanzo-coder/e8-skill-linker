@@ -2,7 +2,7 @@
 
 ## 管理器自举
 
-每次触发时先判断 `e8-skill-linker` 是否已安装在用户级 Agent skills 目录，例如 `~/.agents/skills/e8-skill-linker`。已安装时继续用户的当前任务，不重复提醒。
+首次使用先按[首次使用与接管](first-use-and-adoption.md)只读盘点，同时判断 `e8-skill-linker` 是否已安装在用户级 Agent skills 目录，例如 `~/.agents/skills/e8-skill-linker`。已安装时继续用户的当前任务，不重复提醒。未安装不阻止盘点，扫描完成后再推荐用户级安装。
 
 未安装时，说明它是管理型 skill，可作为全局例外安装，便于新项目和新对话自动召回。业务 skills 仍默认保存在非全局中央库并按项目启用。展示计划并等待：
 
@@ -54,7 +54,7 @@
    - Windows：`%USERPROFILE%\.e8-skill-linker\AgentSkills`
 3. 用户提供自定义父目录时，派生为 `<parent>/.e8-skill-linker/AgentSkills`；不把原件散放在父目录。
 4. 列出配置路径、库名、中央库路径、将创建的目录及影响范围。
-5. 获得用户确认后写入配置，再运行只读检查验证。
+5. 获得用户确认后写入配置，再运行只读检查验证。创建库不迁移旧 skills；仅初始化也是完整有效的选择。管理器自举和库配置可合并成一份明确计划。
 
 ## 命名库操作
 

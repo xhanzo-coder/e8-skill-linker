@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### First-use onboarding
+
+- Add read-only `onboard` inventories with descriptions, visibility scopes, bounded content comparisons, local provenance evidence and explicit unknown/invalid states.
+- Separate manager setup, central-library selection and optional adoption; preserve existing global/project visibility and never infer provenance from an enclosing business repository.
+- Replace unbacked directory migration with digest-checked local snapshot adoption, original backups, local receipts and `restore-adoption`. Migration execution now requires `--expected-digest` and `--dependencies-reviewed` in addition to user confirmation.
+- Keep failed copies on the central volume during rollback; reject discovery-directory central targets and support BOM-encoded skill metadata without rewriting its bytes.
+- Document limits: external installer lock formats and arbitrary Git adoption require review; forced-process termination recovery and full runtime dependency verification are not automatic.
+
+### Interaction
+
+- Route installation requests through inspection/plan, a user-confirmation turn boundary, and execution/verification; prohibit preparatory clones and third-party setup before authorization.
+- Distinguish fresh installation, project-only enablement, and an already-installed no-change checklist. Report existing state separately from work performed in this run.
+
 ### Added
 
 - Per-command `--library` selection for installation, linking, checks and updates; `--all-libraries` for checks and update discovery.
@@ -16,6 +29,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Reject missing project roots before installation, linking, initialization, migration or project configuration can create unintended directories.
+- Verify and report project entry paths, immediate targets and readable skill identities after installation/linking.
+- Clarify the default plan/wait/confirm interaction and distinguish successful dry-runs from user approval; add behavioral replay cases separate from script tests.
+- Accept explicit skill mappings to differently named repository subdirectories while retaining frontmatter identity and path containment checks.
 - Preserve the central entry as the immediate target of Windows project junctions.
 - Accept repository-root skills whose frontmatter name differs from the repository name.
 - Keep self-install backups outside global skill discovery directories.

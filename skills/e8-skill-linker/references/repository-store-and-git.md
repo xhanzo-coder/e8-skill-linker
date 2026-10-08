@@ -23,13 +23,13 @@ AgentSkills/
 
 ## 仓库安装
 
-用户给出仓库时，先只读查看仓库结构，确定要安装的 skill 名称与仓库内相对路径。脚本使用显式 `name=relative/path` 规格：
+用户给出仓库时，先按[安装交互规则](output-and-confirmation.md)进入“检查与计划 → 等待确认 → 执行验证”。只读查看仓库结构，确定要安装的 skill 名称与仓库内相对路径；确认前不通过临时 clone 或第三方安装脚本探查。脚本使用显式 `name=relative/path` 规格：
 
 ```text
 writer=skills/writer,reviewer=.agents/skills/reviewer
 ```
 
-仓库根目录本身就是 skill 时使用 `skill-name=.`。相对路径不能越出仓库；非根目录的最后一段必须与 skill 名称一致。
+仓库根目录本身就是 skill 时使用 `skill-name=.`。相对路径不能越出仓库；仓库内部目录名不要求与 skill 名称一致。例如 `codex-with-chatgpt=skill` 表示读取 `skill/SKILL.md`，验证 frontmatter `name` 为 `codex-with-chatgpt`，再创建同名中央入口。保留仓库原始布局，不重命名来源目录。
 
 根目录 skill 的 frontmatter 名称可以不同于仓库名，中央入口名仍必须等于 frontmatter 名称。
 
@@ -45,6 +45,8 @@ writer=skills/writer,reviewer=.agents/skills/reviewer
 用户确认完整计划后才运行 `install-repo --execute`。执行时克隆完整仓库，验证每个 `SKILL.md` 的 frontmatter `name` 与计划一致，再创建中央和项目入口。任一步失败都回滚本次新建的入口与仓库。
 
 已登记仓库复用当前本地版本，不再次 clone 或自动 fetch。再次运行 `install-repo` 可追加其他 skill、为另一个项目启用已有 skill，或重复执行相同计划。URL、子路径或入口冲突时停止。追加失败只回滚本次新增入口，保留原仓库、已有入口与原清单。上游刚新增的 skill 需要先更新仓库，再追加安装。
+
+上述重复执行能力不是自动写入许可。若只差项目入口，先列启用计划等确认；若请求目标已全部满足，只交付零变更核对单，不重跑 `install-repo --execute`。skill 文件与入口安装不包含第三方依赖、构建、账号连接或初始化，这些需求单独报告和授权。
 
 同一库内同名 skill 冲突，不同库可以独立保存同名 skill。用 `--library <name>` 单次选库，省略时使用活动库，不修改默认选择。
 

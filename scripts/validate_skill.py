@@ -10,6 +10,7 @@ import re
 
 NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 REQUIRED_REFERENCES = {
+    "first-use-and-adoption.md",
     "bootstrap-and-central-library.md",
     "link-sync-and-removal.md",
     "output-and-confirmation.md",

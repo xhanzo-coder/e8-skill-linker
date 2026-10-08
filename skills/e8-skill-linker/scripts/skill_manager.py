@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import platform
@@ -32,10 +33,288 @@ REGISTRY_SCHEMA_VERSION = 1
 VALID_DEFAULT_MODES = {"ask", "centralize", "project-local"}
 IS_WINDOWS = platform.system() == "Windows"
 VERSION = "0.2.0"
+LOCAL_RECORD_DIR = ".skill-linker-local"
+MAX_INVENTORY_FILES = 10000
+MAX_INVENTORY_BYTES = 256 * 1024 * 1024
+
+
+def plain_tree_manifest(root: Path) -> dict:
+    """Hash a bounded plain directory without following nested links or Git metadata."""
+    result = {}
+    total = 0
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        for child in sorted(directory.iterdir()):
+            relative = child.relative_to(root).as_posix()
+            if len(child.relative_to(root).parts) > 32 or len(result) >= MAX_INVENTORY_FILES:
+                raise ValueError(f"目录超过扫描上限，需单独审查: {root}")
+            if child.is_symlink() or is_junction(child):
+                raise ValueError(f"包含链接，不追踪或按普通快照复制: {child}")
+            if child.name == ".git":
+                raise ValueError(f"包含 Git 元数据，应按完整仓库审查: {child}")
+            mode = child.stat().st_mode
+            if stat.S_ISDIR(mode):
+                result[relative] = {"type": "directory"}
+                pending.append(child)
+            elif stat.S_ISREG(mode):
+                total += child.stat().st_size
+                if total > MAX_INVENTORY_BYTES:
+                    raise ValueError(f"目录超过 256 MiB 扫描上限: {root}")
+                digest = hashlib.sha256()
+                with child.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                result[relative] = {"type": "file", "sha256": digest.hexdigest(),
+                                    "mode": stat.S_IMODE(mode)}
+            else:
+                raise ValueError(f"不支持的文件类型: {child}")
+    return result
+
+
+def manifest_digest(manifest: dict) -> str:
+    return hashlib.sha256(json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def skill_description(text: str) -> str | None:
+    """Read common scalar descriptions for display, not arbitrary YAML execution."""
+    lines = text.splitlines()
+    end = lines.index("---", 1)
+    fields = lines[1:end]
+    matches = [i for i, line in enumerate(fields) if line.startswith("description:")]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError("frontmatter 包含重复 description")
+    index = matches[0]
+    raw = fields[index].split(":", 1)[1].strip()
+    if raw in {">", "|", ">-", "|-", ">+", "|+"} or not raw:
+        body = []
+        for line in fields[index + 1:]:
+            if line and not line[0].isspace():
+                break
+            body.append(line.strip())
+        return " ".join(body).strip() or None
+    return raw.strip("\"'")
+
+
+def public_source_url(raw: str) -> str | None:
+    """Do not expose credentials, query strings or fragments from Git remotes."""
+    parsed = urlparse(raw)
+    if parsed.scheme in {"https", "http", "ssh"} and parsed.hostname:
+        return f"{parsed.scheme}://{parsed.hostname}{parsed.path}"
+    scp = re.fullmatch(r"[^@\s]+@([^:\s]+):(.+)", raw)
+    if scp:
+        return f"ssh://{scp.group(1)}/{scp.group(2)}"
+    return None
+
+
+def source_evidence(skill: Path, project: Path, home: Path) -> dict:
+    """Local evidence only. An enclosing business repository is not skill provenance."""
+    evidence = []
+    actual = canonical(skill)
+    root = git_root(actual)
+    if root is not None:
+        containers = [project, home, *user_skill_paths(home),
+                      *[project / rel for rel in PROJECT_SKILL_DIRS]]
+        incidental = any(root == canonical(path) or root in canonical(path).parents for path in containers)
+        if incidental and root != actual:
+            evidence.append({"kind": "enclosing-project-not-source", "path": str(root)})
+        else:
+            remote = git_output(root, ["remote", "get-url", "origin"])
+            evidence.append({"kind": "git-checkout" if root == actual else "containing-git-candidate",
+                             "path": str(root), "url": public_source_url(remote) if remote else None,
+                             "subpath": actual.relative_to(root).as_posix(),
+                             "revision": git_output(root, ["rev-parse", "HEAD"]),
+                             "content_verified": False})
+    for filename in ("SKILL.md", "README.md"):
+        path = actual / filename
+        if not path.is_file() or path.is_symlink() or is_junction(path):
+            continue
+        if path.stat().st_size > 1024 * 1024:
+            raise ValueError(f"来源文本超过 1 MiB: {path}")
+        text = path.read_text(encoding="utf-8-sig")
+        urls = sorted(set(re.findall(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", text)))
+        for url in urls:
+            evidence.append({"kind": "document-url-candidate", "path": str(path),
+                             "url": url.rstrip("."), "content_verified": False})
+    candidates = [item for item in evidence if item["kind"] != "enclosing-project-not-source"]
+    return {"status": "unverified-evidence" if candidates else "unknown",
+            "evidence": evidence, "automatic_updates": False}
+
+
+def externally_managed(path: Path, home: Path) -> bool:
+    actual = canonical(path)
+    protected = [home / ".codex" / "skills" / ".system", home / ".codex" / "plugins",
+                 home / ".claude" / "plugins"]
+    return any(is_path_inside(actual, root) for root in protected)
+
+
+def onboarding_inventory(project: Path, home: Path) -> dict:
+    """Bounded first-use inventory; never initializes, migrates, fetches or executes skills."""
+    config = load_effective_config(project, home)
+    libraries = {} if config["source"] == "error" else config["libraries"]
+    errors = []
+    central_status = []
+    registered = {}
+    for name, library in libraries.items():
+        central = Path(library["path"])
+        state = {"name": name, "path": str(central), "status": "missing", "error": None}
+        if central.is_dir():
+            try:
+                registry = read_registry(central)
+                state["status"] = "registered" if registry_path(central).exists() else "configured-unregistered"
+                for repo in registry["repositories"].values():
+                    for skill_name, record in repo["skills"].items():
+                        entry = central / record["entry"]
+                        expected = central / repo["path"] / record["subpath"]
+                        verified = entry.is_dir() and (entry.is_symlink() or is_junction(entry)) and canonical(entry) == canonical(expected)
+                        registered[str(canonical(expected))] = {
+                            "kind": "skill-linker-registry", "library": name,
+                            "url": public_source_url(repo["url"]), "subpath": record["subpath"],
+                            "revision": repo["revision"], "entry_verified": verified,
+                            "content_verified": False, "name": skill_name,
+                        }
+            except (OSError, ValueError, SystemExit) as exc:
+                # A bad library is reported explicitly, not silently treated as an empty one.
+                state["status"] = "invalid"
+                state["error"] = str(exc)
+                errors.append({"path": str(central), "error": str(exc)})
+        central_status.append(state)
+    roots = [("user", path) for path in user_skill_paths(home)]
+    roots += [("project", project / rel) for rel in PROJECT_SKILL_DIRS]
+    roots += [(f"central:{name}", Path(item["path"])) for name, item in libraries.items()]
+    rows = []
+    cache = {}
+    for scope, directory in roots:
+        if not directory.is_dir():
+            if path_lexists(directory):
+                errors.append({"path": str(directory), "error": "入口根不是可读目录或链接已失效"})
+            continue
+        try:
+            children = sorted(directory.iterdir())
+        except OSError as exc:
+            errors.append({"path": str(directory), "error": str(exc)})
+            continue
+        for entry in children:
+            if entry.name.startswith("."):
+                continue
+            row = {"path": str(entry), "scope": scope, "entry_name": entry.name,
+                   "name": None, "description": None, "actual_path": str(canonical(entry)),
+                   "storage": "junction" if is_junction(entry) else "symlink" if entry.is_symlink() else "directory",
+                   "management": "unmanaged", "digest": None, "issues": [],
+                   "source": {"status": "unknown", "evidence": [], "automatic_updates": False}}
+            if externally_managed(entry, home):
+                row["management"] = "external-manager"
+                row["issues"].append("由系统或插件维护，不纳入自动接管")
+            try:
+                if not entry.is_dir():
+                    raise ValueError("不是目录或链接已失效")
+                if row["actual_path"] not in cache:
+                    skill_file = entry / "SKILL.md"
+                    if skill_file.is_symlink() or is_junction(skill_file):
+                        raise ValueError("SKILL.md 是链接，需单独审查")
+                    if skill_file.stat().st_size > 1024 * 1024:
+                        raise ValueError("SKILL.md 超过 1 MiB")
+                    text = skill_file.read_text(encoding="utf-8-sig")
+                    metadata = {"name": parse_skill_name(text, str(skill_file)),
+                                "description": skill_description(text),
+                                "source": source_evidence(entry, project, home),
+                                "digest": None, "issues": []}
+                    try:
+                        metadata["digest"] = manifest_digest(plain_tree_manifest(entry))
+                    except (OSError, ValueError) as exc:
+                        metadata["issues"].append(str(exc))
+                    cache[row["actual_path"]] = metadata
+                metadata = cache[row["actual_path"]]
+                for field in ("name", "description", "digest"):
+                    row[field] = metadata[field]
+                row["source"] = {**metadata["source"], "evidence": list(metadata["source"]["evidence"])}
+                row["issues"].extend(metadata["issues"])
+                if row["description"] is None:
+                    row["issues"].append("缺少 description；不要编造用途")
+                if row["actual_path"] in registered:
+                    record = registered[row["actual_path"]]
+                    row["source"]["evidence"].insert(0, record)
+                    row["source"]["status"] = "recorded-not-content-verified"
+                    if record["entry_verified"] and record["name"] == row["name"]:
+                        row["management"] = "skill-linker-git"
+                    else:
+                        row["issues"].append("来源清单与入口或身份不一致")
+                for library in libraries.values():
+                    central = Path(library["path"])
+                    local_name = Path(row["actual_path"]).name
+                    record_file = central / LOCAL_RECORD_DIR / f"{local_name}.json"
+                    if canonical(entry) == canonical(central / local_name) and record_file.is_file():
+                        record = read_local_record(record_file)
+                        if (canonical(record["target"]) != canonical(entry) or record["name"] != row["name"] or
+                                record["status"] not in {"adopted", "restored"}):
+                            raise ValueError(f"本地接管记录与原件不一致: {record_file}")
+                        row["management"] = "skill-linker-local"
+                        row["source"]["evidence"].append({"kind": "local-snapshot", "path": str(record_file)})
+                        if row["digest"] != record["digest"]:
+                            row["issues"].append("本地快照自接管后内容已变化；恢复前需审查")
+                row["recommendation"] = "keep" if row["management"] != "unmanaged" else "review-source" if row["source"]["status"] != "unknown" else "keep-or-adopt-local-snapshot"
+            except (OSError, ValueError, SystemExit) as exc:
+                row["issues"].append(str(exc))
+                row["recommendation"] = "review-before-any-change"
+                errors.append({"path": str(entry), "error": str(exc)})
+            rows.append(row)
+    groups = []
+    for name in sorted({row["name"] for row in rows if row["name"] is not None}):
+        matches = [row for row in rows if row["name"] == name]
+        if len(matches) < 2:
+            continue
+        same_original = len({row["actual_path"] for row in matches}) == 1
+        complete = all(row["digest"] is not None for row in matches)
+        relation = "same-original" if same_original else "identical-copies" if complete and len({row["digest"] for row in matches}) == 1 else "different-content" if complete else "comparison-incomplete"
+        groups.append({"name": name, "relation": relation, "paths": [row["path"] for row in matches]})
+    manager_entries = [row["path"] for row in rows if row["scope"] == "user" and row["name"] == "e8-skill-linker"]
+    # Only known locations and already observed link targets become candidates. No home/project crawl.
+    candidates = set()
+    for path in (default_central_dir(home), home / "Skills"):
+        if path.is_dir():
+            candidates.add(str(path))
+    for row in rows:
+        if row["storage"] in {"symlink", "junction"} and row["management"] == "unmanaged":
+            candidates.add(str(Path(row["actual_path"]).parent))
+    installer_records = []
+    for root in (project, home / ".agents", *user_skill_paths(home)):
+        for filename in ("skills-lock.json", ".skill-lock.json"):
+            path = root / filename
+            if path.is_file():
+                installer_records.append({"path": str(path), "status": "format-not-interpreted-review-required"})
+    return {"project": str(project), "read_only": True, "scan_roots": [str(path) for _, path in roots],
+            "excluded": ["hidden/system skill directories", "plugin cache discovery", "other projects", "nested links"],
+            "config": config, "central_libraries": central_status,
+            "central_candidates": sorted(candidates), "installer_records": installer_records,
+            "manager": {"user_entries": manager_entries, "recommendation": "reuse" if manager_entries else "offer-user-install-after-scan"},
+            "skills": rows, "same_name_groups": groups, "errors": errors,
+            "summary": {"entry_count": len(rows), "unique_originals": len({row["actual_path"] for row in rows}),
+                        "requires_review": sum(bool(row["issues"]) for row in rows)},
+            "next_step": "review-config-error" if config["source"] == "error" else "choose-library-and-adoption-items",
+            "defaults": {"migrate_existing": False, "preserve_existing_visibility": True}}
+
+
+def onboard(args: argparse.Namespace) -> int:
+    report = onboarding_inventory(existing_project_directory(args.project), expand(args.home))
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 1 if report["errors"] or report["config"]["source"] == "error" else 0
 
 
 def expand(path: str | Path) -> Path:
     return Path(path).expanduser().absolute()
+
+
+def existing_project_directory(raw: str | Path) -> Path:
+    """Keep the caller's spelling and reject missing roots before any project writes."""
+    project = expand(raw)
+    if not project.is_dir():
+        raise SystemExit(
+            f"项目根目录不存在或不是目录: {project}。"
+            "请从实际工作目录使用 --project .；不会自动创建或猜测项目路径。"
+        )
+    return project
 
 
 def expand_with_home(path: str | Path, home: Path) -> Path:
@@ -369,7 +648,7 @@ def inspect(args: argparse.Namespace) -> int:
 
 
 def config(args: argparse.Namespace) -> int:
-    project = expand(args.project)
+    project = existing_project_directory(args.project)
     home = expand(args.home)
     if args.central and args.central_base:
         raise SystemExit("不能同时提供 --central 和 --central-base")
@@ -544,7 +823,7 @@ def library_add(args: argparse.Namespace) -> int:
 
 
 def library_use(args: argparse.Namespace) -> int:
-    project = expand(args.project)
+    project = existing_project_directory(args.project)
     home = expand(args.home)
     path, _, normalized = load_scoped_config(project, home, args.scope)
     name = command_library_name(args.name)
@@ -570,6 +849,7 @@ def library_use(args: argparse.Namespace) -> int:
 
 
 def ensure_project_hub(project: Path, execute: bool) -> None:
+    existing_project_directory(project)
     hub = project / ".agents" / "skills"
     if path_lexists(hub):
         if not hub.is_dir():
@@ -761,13 +1041,13 @@ def read_skill_name(skill_dir: Path) -> str:
     skill_file = skill_dir / "SKILL.md"
     if not skill_file.is_file():
         raise SystemExit(f"源目录不包含 SKILL.md: {skill_dir}")
-    return parse_skill_name(skill_file.read_text(encoding="utf-8"), str(skill_file))
+    return parse_skill_name(skill_file.read_text(encoding="utf-8-sig"), str(skill_file))
 
 
 def parse_skill_name(text: str, source: str) -> str:
     """Parse the same identity from a worktree file or a candidate Git blob."""
     skill_file = source
-    lines = text.splitlines()
+    lines = text.removeprefix("\ufeff").splitlines()
     if not lines or lines[0].strip() != "---":
         raise SystemExit(f"SKILL.md 缺少 YAML frontmatter: {skill_file}")
     name = None
@@ -922,8 +1202,7 @@ def parse_skill_specs(raw: str) -> list[dict[str, str]]:
         subpath = Path(raw_subpath.strip())
         if not raw_subpath.strip() or subpath.is_absolute() or ".." in subpath.parts:
             raise SystemExit(f"skill 子路径必须是仓库内的安全相对路径: {raw_subpath}")
-        if subpath != Path(".") and subpath.name != name:
-            raise SystemExit(f"skill 名称必须匹配子路径目录名: name={name} path={subpath}")
+        # Source layout is independent of the entry name; validate SKILL.md after cloning.
         specs.append({"name": name, "subpath": subpath.as_posix()})
     if not specs:
         raise SystemExit("--skills 至少需要一个 name=relative/path")
@@ -943,7 +1222,7 @@ def cleanup_empty_repo_parents(repo_dest: Path, store: Path) -> None:
 
 
 def install_repo(args: argparse.Namespace) -> int:
-    project = expand(args.project)
+    project = existing_project_directory(args.project)
     home = expand(args.home)
     central = configured_central(project, home, args.library)
     repo_url = validate_git_argument(args.repo_url, "repo URL")
@@ -973,6 +1252,8 @@ def install_repo(args: argparse.Namespace) -> int:
     project_states = [validate_link_destination(entry, target) for entry, target in project_entries]
     plan = {
         "repository": {"id": repo_id, "url": repo_url, "destination": str(repo_dest)},
+        "project": str(project),
+        "working_directory": str(Path.cwd()),
         "central_library": str(central),
         "reuse_repository": reuse,
         "central_entries": [{"path": str(entry), "target": str(target)} for entry, target in central_entries],
@@ -1007,10 +1288,6 @@ def install_repo(args: argparse.Namespace) -> int:
             if not is_path_inside(skill_dir, repo_dest):
                 raise SystemExit(f"skill 路径越出仓库: {skill_dir}")
             actual_name = read_skill_name(skill_dir)
-            if spec["subpath"] != "." and skill_dir.name != actual_name:
-                raise SystemExit(
-                    f"skill 目录名与 SKILL.md name 不一致: directory={skill_dir.name} name={actual_name}"
-                )
             if actual_name != spec["name"]:
                 raise SystemExit(
                     f"skill name 与安装计划不一致: expected={spec['name']} actual={actual_name} path={skill_dir}"
@@ -1025,6 +1302,7 @@ def install_repo(args: argparse.Namespace) -> int:
                 create_symlink(entry, target, True, args.link_type, allowed_roots=[central, project_hub])
                 if state == "absent":
                     created_project.append(entry)
+        verified_entries = verify_project_entries(project, project_entries)
         revision = git_output(repo_dest, ["rev-parse", "HEAD"])
         if revision is None:
             raise SystemExit(f"无法读取已克隆仓库的 HEAD: {repo_dest}")
@@ -1051,7 +1329,7 @@ def install_repo(args: argparse.Namespace) -> int:
             remove_directory_tree(repo_dest)
             cleanup_empty_repo_parents(repo_dest, store)
         raise
-    print(json.dumps({"installed_repository": plan}, ensure_ascii=False, indent=2))
+    print(json.dumps({"installed_repository": plan, "verified_project_entries": verified_entries}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1176,7 +1454,7 @@ def install_self(args: argparse.Namespace) -> int:
 
 
 def init(args: argparse.Namespace) -> int:
-    project = expand(args.project)
+    project = existing_project_directory(args.project)
     execute = args.execute
     hub = project / ".agents" / "skills"
     agents = parse_agents(args.agents)
@@ -1235,18 +1513,39 @@ def prepare_link(
         name = validate_skill_name(raw_name if raw_name is not None else source.name)
     target = project / ".agents" / "skills" / name
     return {
+        "project": str(project),
         "source_path": str(source),
         "target_path": str(target),
         "name": name,
     }
 
 
+def verify_project_entries(project: Path, entries: list[tuple[Path, Path]]) -> list[dict]:
+    """Verify the named project, each immediate target and readable skill identity."""
+    existing_project_directory(project)
+    verified = []
+    for entry, expected_target in entries:
+        if entry.parent != project / ".agents" / "skills":
+            raise SystemExit(f"入口不属于计划中的项目 hub: {entry}")
+        if validate_link_destination(entry, expected_target) != "same-link":
+            raise SystemExit(f"项目入口未建立: {entry}")
+        verified.append({
+            "project": str(project),
+            "path": str(entry),
+            "immediate_target": str(immediate_link_target(entry)),
+            "resolved_target": str(canonical(entry)),
+            "skill_name": read_skill_name(entry),
+        })
+    return verified
+
+
 def link(args: argparse.Namespace) -> int:
-    project = expand(args.project)
+    project = existing_project_directory(args.project)
     home = expand(args.home)
     central = configured_central(project, home, args.library)
     project_hub = project / ".agents" / "skills"
     prepared = prepare_link(project, args.source, args.name, central, project_hub)
+    print(json.dumps({"planned_link": prepared}, ensure_ascii=False, indent=2))
     validate_link_destination(Path(prepared["target_path"]), Path(prepared["source_path"]))
     ensure_project_hub(project, args.execute)
     create_symlink(
@@ -1258,6 +1557,9 @@ def link(args: argparse.Namespace) -> int:
     )
     if not args.execute:
         print("当前只是 dry-run；用户确认后再传入 --execute 执行")
+    else:
+        verified = verify_project_entries(project, [(Path(prepared["target_path"]), Path(prepared["source_path"]))])
+        print(json.dumps({"verified_project_entries": verified}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1265,7 +1567,7 @@ def link_many(args: argparse.Namespace) -> int:
     sources = [part.strip() for part in args.sources.split(",") if part.strip()]
     if not sources:
         raise SystemExit("没有提供可链接的 sources")
-    project = expand(args.project)
+    project = existing_project_directory(args.project)
     home = expand(args.home)
     central = configured_central(project, home, args.library)
     project_hub = project / ".agents" / "skills"
@@ -1288,6 +1590,11 @@ def link_many(args: argparse.Namespace) -> int:
         )
     if not args.execute:
         print("当前只是 dry-run；用户确认后再传入 --execute 执行")
+    else:
+        verified = verify_project_entries(project, [
+            (Path(item["target_path"]), Path(item["source_path"])) for item in prepared
+        ])
+        print(json.dumps({"verified_project_entries": verified}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1306,7 +1613,7 @@ def project_link_inventory(project: Path, libraries: dict[str, Path]) -> list[di
 
 
 def check(args: argparse.Namespace) -> int:
-    project = expand(args.project)
+    project = existing_project_directory(args.project)
     home = expand(args.home)
     config = load_effective_config(project, home)
     if config["source"] == "error":
@@ -1398,50 +1705,194 @@ def unlink(args: argparse.Namespace) -> int:
 
 
 def migrate(args: argparse.Namespace) -> int:
-    project = expand(args.project)
+    project = existing_project_directory(args.project)
     home = expand(args.home)
     source = expand(args.source)
     central = expand(args.central)
     expected_central = configured_central(project, home)
     if canonical(central) != canonical(expected_central):
         raise SystemExit(f"central 必须等于当前生效配置中的中央库: {expected_central}")
-    source_item = classify(source)
-    if source_item["is_symlink"] or source_item["is_junction"]:
-        raise SystemExit(f"源路径已经是链接，不需要迁移: {source}")
-    allowed_source_roots = [project / rel for rel in PROJECT_SKILL_DIRS]
-    allowed_source_roots.extend(user_skill_paths(home))
-    if not any(is_path_inside(source, root) for root in allowed_source_roots):
-        raise SystemExit(
-            "source 必须位于当前项目或用户级 Agent skills 目录内；"
-            f"source={source} allowed_roots={[str(root) for root in allowed_source_roots]}"
-        )
-    if not source.is_dir():
-        raise SystemExit(f"源路径不存在或不是目录: {source}")
-    if not (source / "SKILL.md").is_file():
-        raise SystemExit(f"源目录不包含 SKILL.md: {source}")
-    name = validate_skill_name(args.name or source.name)
+    scope = adoption_scope(source, project, home)
+    require_plain_location(source)
+    require_plain_location(central)
+    discovery_roots = user_skill_paths(home) + [project / rel for rel in PROJECT_SKILL_DIRS]
+    if any(is_path_inside(central, root) for root in discovery_roots):
+        raise SystemExit("快照接管要求非 Agent 发现目录的中央库，避免扩大或改变原可见范围")
+    if not source.is_dir() or externally_managed(source, home):
+        raise SystemExit(f"源目录不存在或由外部管理器维护: {source}")
+    name = read_skill_name(source)
+    if args.name is not None and args.name != name:
+        raise SystemExit("接管名称必须与 frontmatter name 一致")
     target = central / name
-    if target.exists() or target.is_symlink() or is_junction(target):
+    if is_path_inside(central, source) or is_path_inside(source, central):
+        raise SystemExit("原目录与中央库不能重叠")
+    if path_lexists(target):
         raise SystemExit(f"中央目录中已存在目标路径，默认不覆盖: {target}")
-    plan = {
-        "move": {"from": str(source), "to": str(target)},
-        "create_symlink": {"path": str(source), "target": str(target)},
-        "link_type": args.link_type,
-        "will_delete_real_directory": False,
-        "note": "执行时会把真实目录移动到中央目录，然后在原位置创建指向中央目录的软链接。",
-    }
+    manifest = plain_tree_manifest(source)
+    digest = manifest_digest(manifest)
+    backup = adoption_backup(source, digest, scope, project, home)
+    failure_copy = central / f".skill-linker-failed-{backup.name}"
+    record_path = central / LOCAL_RECORD_DIR / f"{name}.json"
+    require_plain_location(backup.parent)
+    require_plain_location(record_path)
+    if path_lexists(backup) or path_lexists(record_path) or path_lexists(failure_copy):
+        raise SystemExit("已存在接管记录或备份；先审查该次操作，不覆盖或重复接管")
+    provenance = source_evidence(source, project, home)
+    record = {"schema_version": 1, "source": str(source), "target": str(target),
+              "central": str(central), "name": name, "scope": scope,
+              "digest": digest, "backup": str(backup), "project": str(project),
+              "home": str(home), "status": "prepared", "source_evidence": provenance}
+    plan = {"copy": {"from": str(source), "to": str(target)},
+            "backup_original": str(backup / "original"),
+            "receipt": str(backup / "receipt.json"), "local_record": str(record_path),
+            "failure_copy": str(failure_copy),
+            "create_symlink": {"path": str(source), "target": str(target)},
+            "link_type": args.link_type, "preserved_scope": scope,
+            "expected_digest": digest, "source_evidence": provenance,
+            "requires_dependency_review": True, "automatic_updates": False,
+            "will_delete_real_directory": False}
     print(json.dumps(plan, ensure_ascii=False, indent=2))
     if not args.execute:
-        print("当前只是 dry-run；用户确认后再传入 --execute 执行迁移")
+        print("只读计划；审查外部路径依赖并获用户确认后，携带 --expected-digest <上方值> --dependencies-reviewed --execute")
         return 0
-    central.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(source), str(target))
+    if args.expected_digest != digest or not args.dependencies_reviewed:
+        raise SystemExit("必须使用已确认计划的 --expected-digest，并完成 --dependencies-reviewed；内容变化时重新制定计划")
+    backup.mkdir(parents=True)
+    write_adoption_record(backup / "receipt.json", record)
+    stage = central / f".skill-linker-stage-{backup.name}"
+    # Exclusive staging and rename preserve the original until the copy is verified.
+    stage.mkdir()
+    installed = False
+    moved = False
     try:
-        create_symlink(source, target, True, args.link_type, allowed_roots=[expected_central])
-    except (OSError, SystemExit):
-        shutil.move(str(target), str(source))
+        shutil.copytree(source, stage, dirs_exist_ok=True)
+        if plain_tree_manifest(stage) != manifest or plain_tree_manifest(source) != manifest:
+            raise ValueError("复制校验失败或源内容发生变化；未切换原入口")
+        if path_lexists(target):
+            raise SystemExit(f"中央目标在执行期间出现冲突: {target}")
+        stage.rename(target)
+        installed = True
+        source.rename(backup / "original")
+        moved = True
+        create_symlink(source, target, True, args.link_type, allowed_roots=[central])
+        if validate_link_destination(source, target) != "same-link" or read_skill_name(source) != name:
+            raise ValueError("原入口切换后验证失败")
+        record["status"] = "adopted"
+        write_adoption_record(record_path, record)
+        write_adoption_record(backup / "receipt.json", record)
+    except (OSError, ValueError, SystemExit):
+        # Restore the original. Keep failed copies for inspection rather than deleting data.
+        if moved:
+            if source.is_symlink() or is_junction(source):
+                if immediate_link_target(source) != target:
+                    raise RuntimeError(f"入口被其他操作改变；保留备份供人工恢复: {backup}")
+                remove_link_path(source)
+            if path_lexists(source):
+                raise RuntimeError(f"原位置出现冲突；备份保留在: {backup}")
+            (backup / "original").rename(source)
+        if installed:
+            target.rename(failure_copy)
+        elif stage.exists():
+            stage.rename(failure_copy)
+        if record_path.exists():
+            record_path.rename(failure_copy / "failed-record.json")
+        record["status"] = "failed-original-preserved"
+        write_adoption_record(backup / "receipt.json", record)
         raise
     print(json.dumps({"migrated": plan}, ensure_ascii=False, indent=2))
+    return 0
+
+
+def require_plain_location(path: Path) -> None:
+    if canonical(path) != path.absolute() or path.is_symlink() or is_junction(path):
+        raise SystemExit(f"接管路径或父目录包含链接，需单独审查: {path}")
+
+
+def adoption_scope(source: Path, project: Path, home: Path) -> str:
+    if source.parent in user_skill_paths(home):
+        return "user"
+    if source.parent in [project / rel for rel in PROJECT_SKILL_DIRS]:
+        return "project"
+    raise SystemExit("接管源必须是当前项目或用户级 skills 目录中的直接子目录；不接管系统、插件或嵌套路径")
+
+
+def adoption_backup(source: Path, digest: str, scope: str, project: Path, home: Path) -> Path:
+    operation = hashlib.sha256((str(source) + "\n" + digest).encode("utf-8")).hexdigest()[:24]
+    base = home / ".e8-skill-linker" / "backups" if scope == "user" else project / ".skill-linker-backups"
+    return base / "adoptions" / operation
+
+
+def write_adoption_record(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=path.parent,
+                                     prefix=".adoption-", suffix=".tmp", delete=False) as handle:
+        json.dump(record, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+        temporary = Path(handle.name)
+    os.replace(temporary, path)
+
+
+def read_local_record(path: Path) -> dict:
+    record = json.loads(path.read_text(encoding="utf-8"))
+    fields = {"schema_version", "source", "target", "central", "name", "scope", "digest",
+              "backup", "project", "home", "status", "source_evidence"}
+    if not isinstance(record, dict) or set(record) != fields or record["schema_version"] != 1:
+        raise ValueError(f"接管记录格式不合法: {path}")
+    for field in fields - {"schema_version", "source_evidence"}:
+        if not isinstance(record[field], str) or not record[field]:
+            raise ValueError(f"接管记录字段不合法: {field}")
+    if not re.fullmatch(r"[a-f0-9]{64}", record["digest"]) or record["scope"] not in {"user", "project"}:
+        raise ValueError(f"接管记录摘要或范围不合法: {path}")
+    validate_skill_name(record["name"])
+    return record
+
+
+def restore_adoption(args: argparse.Namespace) -> int:
+    project = existing_project_directory(args.project)
+    home = expand(args.home)
+    receipt = expand(args.receipt)
+    require_plain_location(receipt)
+    record = read_local_record(receipt)
+    source, target = Path(record["source"]), Path(record["target"])
+    central = configured_central(project, home, args.library)
+    scope = adoption_scope(source, project, home)
+    backup = adoption_backup(source, record["digest"], scope, project, home)
+    if (record["project"] != str(project) or record["home"] != str(home) or
+            record["central"] != str(central) or record["scope"] != scope or
+            record["backup"] != str(backup) or receipt != backup / "receipt.json" or
+            target != central / record["name"] or record["status"] != "adopted"):
+        raise SystemExit("恢复记录与当前项目、库或操作路径不一致")
+    require_plain_location(backup)
+    require_plain_location(target)
+    original = backup / "original"
+    require_plain_location(original)
+    if not (source.is_symlink() or is_junction(source)) or immediate_link_target(source) != target:
+        raise SystemExit("原入口已被修改；拒绝覆盖")
+    if canonical(source.parent) != source.parent:
+        raise SystemExit("原入口的父目录已改变；拒绝恢复")
+    record_path = central / LOCAL_RECORD_DIR / f"{record['name']}.json"
+    require_plain_location(record_path)
+    if read_local_record(record_path) != record:
+        raise SystemExit("中央接管记录与恢复凭据不一致")
+    if manifest_digest(plain_tree_manifest(original)) != record["digest"]:
+        raise SystemExit("备份内容已改变；拒绝自动恢复")
+    if manifest_digest(plain_tree_manifest(target)) != record["digest"]:
+        raise SystemExit("中央副本已改变；先审查修改，不用旧备份替换当前入口")
+    print(json.dumps({"restore_original": str(source), "backup": str(original),
+                      "keep_central_copy": str(target), "preserved_scope": scope}, ensure_ascii=False, indent=2))
+    if not args.execute:
+        print("仅恢复计划；用户确认后添加 --execute。中央副本不会删除。")
+        return 0
+    remove_link_path(source)
+    try:
+        original.rename(source)
+    except OSError:
+        create_symlink(source, target, True, args.link_type, allowed_roots=[central])
+        raise
+    record["status"] = "restored"
+    write_adoption_record(record_path, record)
+    write_adoption_record(receipt, record)
+    print(json.dumps({"restored": str(source), "central_copy_preserved": str(target)}, ensure_ascii=False))
     return 0
 
 
@@ -1800,6 +2251,11 @@ def main() -> int:
     inspect_parser.add_argument("--home", default="~")
     inspect_parser.set_defaults(func=inspect)
 
+    onboard_parser = sub.add_parser("onboard", help="只读盘点用户级与当前项目 skills，不执行初始化或迁移")
+    onboard_parser.add_argument("--project", default=".")
+    onboard_parser.add_argument("--home", default="~")
+    onboard_parser.set_defaults(func=onboard)
+
     config_parser = sub.add_parser("config")
     config_parser.add_argument("--project", default=".")
     config_parser.add_argument("--home", default="~")
@@ -1952,9 +2408,20 @@ def main() -> int:
     migrate_parser.add_argument("--source", required=True)
     migrate_parser.add_argument("--central", required=True)
     migrate_parser.add_argument("--name")
+    migrate_parser.add_argument("--expected-digest")
+    migrate_parser.add_argument("--dependencies-reviewed", action="store_true")
     migrate_parser.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
     migrate_parser.add_argument("--execute", action="store_true")
     migrate_parser.set_defaults(func=migrate)
+
+    restore_parser = sub.add_parser("restore-adoption", help="恢复接管前的原目录，保留中央副本")
+    restore_parser.add_argument("--project", default=".")
+    restore_parser.add_argument("--home", default="~")
+    restore_parser.add_argument("--library")
+    restore_parser.add_argument("--receipt", required=True)
+    restore_parser.add_argument("--link-type", choices=["auto", "symlink", "junction"], default="auto")
+    restore_parser.add_argument("--execute", action="store_true")
+    restore_parser.set_defaults(func=restore_adoption)
 
     args = parser.parse_args()
     return args.func(args)

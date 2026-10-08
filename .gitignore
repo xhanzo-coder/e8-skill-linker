@@ -17,6 +17,7 @@ env/
 .agents/
 .codex/
 .claude/
+.skill-linker-backups/
 
 # Temporary files and logs.
 *.log

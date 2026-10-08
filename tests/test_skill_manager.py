@@ -391,6 +391,8 @@ class SkillManagerTests(unittest.TestCase):
             central=str(self.central),
             name=None,
             link_type="auto",
+            expected_digest=skill_manager.manifest_digest(skill_manager.plain_tree_manifest(source)),
+            dependencies_reviewed=True,
             execute=True,
         )
 
@@ -414,6 +416,8 @@ class SkillManagerTests(unittest.TestCase):
             central=str(self.central),
             name=None,
             link_type="auto",
+            expected_digest=skill_manager.manifest_digest(skill_manager.plain_tree_manifest(source)),
+            dependencies_reviewed=True,
             execute=True,
         )
 

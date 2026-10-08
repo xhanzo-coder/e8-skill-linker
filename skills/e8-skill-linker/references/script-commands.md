@@ -2,9 +2,16 @@
 
 使用 `scripts/skill_manager.py` 执行确定性操作。不带 `--execute` 的写入命令只输出计划。
 
+项目根目录必须已存在。当前项目使用工具返回的真实工作目录，并传 `--project .`；脚本不自动创建项目根。跨项目操作使用已经核实、在计划中展示的绝对路径。`cd` 报错时停止，不能接着依赖未知工作目录执行命令。
+
+dry-run 后默认将完整计划交给用户并结束回复；收到对该计划的确认后再执行相同参数加 `--execute`。用户主动、明确要求跳过确认且作用范围明确，或对同一计划已有确认时，无需再次询问。完整的 CLI 参数本身不等于确认。目标已满足时按[安装交互规则](output-and-confirmation.md)报告零变更，不为验证而重跑写入命令。执行后的 `verified_project_entries` 给出实际项目、入口、直接目标和 skill 身份。
+
 ## 检查
 
+首次盘点使用 `onboard`（只读、不联网、不安装管理器），旧 `inspect` 仍用于路径与配置级诊断：
+
 ```bash
+python3 scripts/skill_manager.py onboard --project .
 python3 scripts/skill_manager.py inspect --project .
 python3 scripts/skill_manager.py config --project .
 python3 scripts/skill_manager.py library-list --project .
@@ -89,6 +96,8 @@ python3 scripts/skill_manager.py install-repo \
 
 根目录就是 skill 时使用 `--skills skill-name=.`。计划会列出 `.repos/<host>/<owner>/<repo>`、中央 skill 入口、可选项目入口和 `.skill-linker-lock.json`。用户确认后增加 `--execute`。
 
+来源目录名可以与 skill 名称不同：`--skills codex-with-chatgpt=skill` 或 `--skills writer=packages/tools/definition` 都使用显式映射。入口名必须与对应 `SKILL.md` 的 frontmatter `name` 一致，来源路径仍必须位于仓库内。
+
 `install-repo` 要求完整计划中的 skill 名称与路径都已知。它会原子化地克隆仓库、验证 `SKILL.md`、创建入口并写入来源清单；失败时回滚本次新建内容。
 
 根目录 skill 的名称可以不同于仓库名。仓库已经登记时复用本地版本；再运行相同命令可追加 skill，或用 `--enable-project --project <另一个项目>` 启用已有 skill。新增失败保留已有仓库、入口与清单，不自动 fetch。
@@ -115,7 +124,19 @@ python3 scripts/skill_manager.py migrate \
   --central ~/.e8-skill-linker/AgentSkills
 ```
 
-`--central` 必须与当前活动中央库一致。确认后增加 `--execute`。
+`--central` 必须与当前活动中央库一致且位于 Agent 发现目录之外。本命令先输出备份、恢复凭据、原入口范围和 `expected_digest`。审查外部路径依赖并获用户确认后，在同一命令上添加 `--expected-digest <计划中的摘要> --dependencies-reviewed --execute`。不提供这两个前置条件就拒绝写入；摘要不是用户批准令牌。
+
+原件保留为备份，原位置变成指向中央本地快照的链接；不会登记成可 Git 更新的仓库。只处理普通独立目录，不复制嵌套链接、Git 元数据或特殊文件。详细边界见[首次使用与接管](first-use-and-adoption.md)。
+
+恢复先预览：
+
+```bash
+python3 scripts/skill_manager.py restore-adoption \
+  --project . \
+  --receipt /absolute/path/from-plan/receipt.json
+```
+
+用户确认后加 `--execute`。恢复原真实目录并保留中央副本；源入口、备份或中央内容发生变化时停止，不覆盖。
 
 ## Git 检查与更新
 

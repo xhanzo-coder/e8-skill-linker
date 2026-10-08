@@ -39,7 +39,7 @@
 ## 环境与兼容性
 
 - Python 3.10 或更高版本；运行时不依赖第三方 Python 包。
-- 只有克隆、更新、checkout 和仓库状态命令需要 Git。
+- 克隆、更新、checkout、仓库状态及 `onboard` 的本地来源取证需要 Git。
 - macOS 和 Linux 使用目录软链接。
 - Windows 支持目录软链接和 junction。软链接可能需要开启 Developer Mode 或使用管理员终端；junction 通常不需要。
 - Codex、Claude Code 以及其他能从兼容项目目录发现 Agent Skills 的工具，可以共享同一个项目级 skill 入口。
@@ -95,12 +95,22 @@ npx skills remove e8-skill-linker --global --agent codex
 
 首次触发时，skill 会按以下顺序工作：
 
-1. 检查 `e8-skill-linker` 是否已经安装在用户级 Agent skills 目录中。
-2. 读取当前项目和用户级 `.skill-linker.json`。
-3. 如果没有配置，推荐非全局中央库：macOS/Linux 使用 `~/.e8-skill-linker/AgentSkills`，Windows 使用 `%USERPROFILE%\.e8-skill-linker\AgentSkills`。
-4. 允许用户提供自定义父目录，并在该目录下派生 `.e8-skill-linker/AgentSkills`。
-5. 只读扫描项目级和用户级 skills，明确区分来源、目标和影响。
-6. 对配置、仓库安装、迁移、同步、链接、删除和 Git 更新先生成一份完整计划，用户确认作用范围后执行。仓库安装失败会回滚本次新增内容；Git 更新在应用前验证候选提交。
+1. 使用 `onboard --project .` 只读盘点用户级、当前项目和已登记中央库，展示名称、用途、范围、原件位置、来源证据、重复关系和问题。不会扫描其他项目或执行第三方脚本。
+2. 展示清单后推荐用户级安装管理器；已安装则复用，未安装不影响先看盘点结果。
+3. 有有效中央库则推荐复用；疑似库先让用户确认角色；配置或来源清单损坏先报告。没有库时推荐 `personal` 和非全局路径，或让用户指定已有自定义目录，不强制搬家。
+4. 让用户选择“只初始化”或具体接管项；已有 skills 默认全部保留，创建库不等于自动迁移。
+5. 汇总管理器、配置、接管项、备份、原入口范围与未处理项的完整计划，结束本轮等待确认；确认后只执行选定动作。
+6. 普通独立目录采用有备份的本地快照接管，保留原用户级/项目级入口。验证并提供恢复凭据；不将未知来源伪装成可更新 Git 仓库。
+
+可以直接说：“用 skill-linker 盘点我的用户级和当前项目 skills，先给我清单和建议，不要迁移。”
+
+```bash
+python skills/e8-skill-linker/scripts/skill_manager.py onboard --project .
+```
+
+`migrate` 先输出计划及内容摘要，确认后还须提供 `--expected-digest <摘要> --dependencies-reviewed --execute`。`restore-adoption --receipt <凭据>` 先预览恢复，确认后加 `--execute`，保留中央副本。详见[首次使用与接管](skills/e8-skill-linker/references/first-use-and-adoption.md)。
+
+来源识别有边界：文档 URL 仅为候选，业务项目的父级 Git remote 不作为 skill 来源；其他安装器锁文件目前仅列出待审查位置，未做通用格式解析。无 Git 元数据的目录不能保证找回来源或安装版本。任意旧 Git 安装转受管理仓库仍需单独核验，尚无一键转换命令。
 
 默认不会把 `~/.agents/skills`、`~/.codex/skills` 或 `~/.claude/skills` 当作中央库。如果用户选择这些全局目录，必须明确提醒它们可能让 skills 对所有项目可见，并要求确认。
 
@@ -295,6 +305,12 @@ python3 skills/e8-skill-linker/scripts/skill_manager.py check --all-libraries
 
 已有项目中直接指向 `.repos` 的旧链接不会自动重建。先通过 `check` 查看直接目标，再明确执行 unlink/link，使其经过中央入口。管理器自身替换安装时，备份固定保存到 `~/.e8-skill-linker/backups/e8-skill-linker/`，避免旧副本被 Agent 重复发现。
 
+所有平台都允许仓库目录名与 skill 名称不同。例如 `--skills codex-with-chatgpt=skill` 将 `skill/SKILL.md` 暴露为 `codex-with-chatgpt` 入口。入口名必须匹配 frontmatter `name`，来源路径必须位于仓库内，不重命名上游目录。
+
+项目根目录必须已经存在。操作当前项目时，从环境取得真实工作目录并使用 `--project .`，不要手抄路径标点，也不要在 `cd` 失败后继续执行。安装和链接完成后输出已验证的项目入口绝对路径、直接目标及可读的 skill 身份；只校验中央库不能证明项目安装成功。
+
+普通安装请求遵循“只读检查与计划 → 结束本轮等待确认 → 执行并验证”。确认前不克隆（含临时克隆）、fetch、写配置、建链接或运行第三方脚本；dry-run 成功不等于用户确认。中央库已有但项目未启用时，先给启用计划；目标已全部满足时展示核对单，明确“本次仅检查，未执行安装、未修改文件”，建议保留现状，不重跑写入命令。第三方依赖和初始化另行授权。同一计划的已有确认，或用户主动、明确要求跳过确认且作用范围明确时，无需重复询问。这项对话要求不能靠 CLI 参数强制证明，对应的独立行为检查见[交互回放用例](tests/interaction-cases.md)。
+
 ## Windows
 
 Windows 上可以使用目录 symlink，也可以使用 junction：
@@ -348,7 +364,11 @@ e8-skill-linker/
 │       │   └── openai.yaml
 │       ├── references/
 │       └── scripts/
-└── tests/test_skill_manager.py
+└── tests/
+    ├── test_skill_manager.py
+    ├── test_repository_workflows.py
+    ├── test_onboarding.py
+    └── interaction-cases.md
 ```
 
 ## 开发与验证

@@ -39,7 +39,7 @@ Business skills are not installed globally by default. `e8-skill-linker` is a ma
 ## Requirements and Compatibility
 
 - Python 3.10 or newer; no third-party runtime packages are required.
-- Git is required only for clone, update, checkout, and repository status commands.
+- Git is required for clone, update, checkout, repository status and local source evidence in `onboard`.
 - macOS and Linux use directory symlinks.
 - Windows supports directory symlinks and junctions. Symlinks may require Developer Mode or an elevated terminal; junctions usually do not.
 - Codex, Claude Code, and other tools that discover Agent Skills from compatible project directories can share the same project skill hub.
@@ -95,12 +95,22 @@ See the [Skills CLI documentation](https://www.skills.sh/docs/cli) for more sour
 
 When triggered for the first time, the skill follows this sequence:
 
-1. Check whether `e8-skill-linker` is installed in a user-level Agent skills directory.
-2. Read the project-level and user-level `.skill-linker.json` files.
-3. If no configuration exists, recommend a non-global central library: `~/.e8-skill-linker/AgentSkills` on macOS/Linux or `%USERPROFILE%\.e8-skill-linker\AgentSkills` on Windows.
-4. Accept a custom parent directory and derive `<parent>/.e8-skill-linker/AgentSkills` beneath it.
-5. Inspect project-level and user-level skills in read-only mode and show sources, targets, and impacts separately.
-6. Combine configuration, repository storage, central entries, and optional project entries into one reviewable plan; execute after scope-specific confirmation. Repository installation rolls back its new content on failure; Git updates validate candidates before applying them.
+1. Run `onboard --project .` to inventory user-level, current-project and configured central entries without writes. Show names, descriptions, visibility, actual sources, provenance evidence, duplicate relationships and issues. Do not crawl other projects or execute third-party scripts.
+2. After presenting the inventory, recommend a user-level manager installation if needed. An existing installation is reused; its absence does not block inspection.
+3. Recommend reusing a valid library, ask about unregistered candidates, and report invalid configuration/registries. With no library, suggest `personal` at a non-global location or accept an explicitly selected existing custom directory without forcing a move.
+4. Let the user choose initialization only or specific adoption items. Existing skills stay untouched by default; creating a library does not migrate them.
+5. Present one plan covering manager setup, configuration, selected items, backups, preserved entry scopes and exclusions. End the turn and wait for confirmation before executing selected actions.
+6. Adopt plain independent directories as backed-up local snapshots while preserving their user/project entry scopes. Verify and provide recovery receipts; do not pretend unknown snapshots are updateable Git repositories.
+
+Try: “Use skill-linker to inventory my user-level and current-project skills. Show the list and recommendations first; do not migrate anything.”
+
+```bash
+python skills/e8-skill-linker/scripts/skill_manager.py onboard --project .
+```
+
+`migrate` outputs a plan and content digest. After confirmation, execution also requires `--expected-digest <digest> --dependencies-reviewed --execute`. `restore-adoption --receipt <receipt>` previews restoration; add `--execute` after confirmation. The central copy is retained. See [first use and adoption](skills/e8-skill-linker/references/first-use-and-adoption.md).
+
+Provenance has limits: document URLs are candidates, an enclosing business project's Git remote is not the skill source, and other installers' lock files are currently listed for review rather than parsed generically. A copied directory may not retain enough evidence to recover its repository or installed revision. Converting arbitrary old Git installations to managed repositories still needs a separate review; there is no one-click conversion command.
 
 By default, `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills` are not treated as the central library. If a user chooses one of these global directories, the skill must explain that the skills may become visible to every project and request explicit confirmation.
 
@@ -295,6 +305,12 @@ Reports distinguish repository changes, directly changed installed skills, added
 
 Existing project links that point directly into `.repos` are not silently rewritten. Inspect their immediate targets with `check`, then explicitly unlink and relink through the central entry. Replacement backups of the management skill are stored under `~/.e8-skill-linker/backups/e8-skill-linker/`, outside Agent discovery directories.
 
+Repository directory names do not need to match skill names on any platform. For example, `--skills codex-with-chatgpt=skill` exposes a skill from `skill/SKILL.md` as `codex-with-chatgpt`. The entry name must match the frontmatter `name`, and the source path must stay inside the repository. No upstream directory is renamed.
+
+Project roots must already exist. For the current project, obtain the actual working directory from the environment and use `--project .`; do not retype punctuation in paths or continue after a failed directory change. Installation and linking report verified absolute project entry paths, immediate targets and readable skill identities. Central-library validation alone does not prove project installation.
+
+An ordinary installation request follows read-only inspection and planning → end the turn and wait for confirmation → execute and verify. Before confirmation, do not clone (even temporarily), fetch, write configuration, create links, or run third-party scripts; a successful dry-run is not confirmation. If only the project entry is missing, present an enablement plan. If everything requested already exists, provide a checklist explicitly stating that this run only inspected and changed nothing; recommend keeping the existing installation without rerunning a write command. Third-party dependencies and initialization require separate authorization. Existing approval of the same plan, or an explicit user request to skip confirmation within a defined scope, need not be requested again. The CLI flag does not enforce this conversation requirement. See [interaction replay cases](tests/interaction-cases.md) for the separate behavioral checks.
+
 ## Windows
 
 Windows can use directory symlinks or junctions:
@@ -348,7 +364,11 @@ e8-skill-linker/
 │       │   └── openai.yaml
 │       ├── references/
 │       └── scripts/
-└── tests/test_skill_manager.py
+└── tests/
+    ├── test_skill_manager.py
+    ├── test_repository_workflows.py
+    ├── test_onboarding.py
+    └── interaction-cases.md
 ```
 
 ## Development and Validation
